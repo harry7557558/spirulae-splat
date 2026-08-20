@@ -319,12 +319,14 @@ void run_normalize_clip(Rng& r) {
     // Spikes: what the clip exists to flatten.
     for (size_t i = 3; i < h.size(); i += 257) h[i] = 1e4f;
 
-    const struct { bool norm; float q; } cases[] = {
-        {true, 1.0f}, {false, 0.98f}, {true, 0.98f}, {false, 1.0f},
+    const struct { bool norm; float q; float p; } cases[] = {
+        {true, 1.0f, 1.0f}, {false, 0.98f, 1.0f}, {true, 0.98f, 1.0f},
+        {false, 1.0f, 1.0f}, {false, 1.0f, 0.5f}, {true, 0.98f, 2.0f},
     };
     for (const auto& c : cases) {
         float* d = upload(h);
-        normalize_clip_map_inplace_tensor(ttv(d, {B, H, W, 1}), c.norm, c.q);
+        normalize_clip_map_inplace_tensor(ttv(d, {B, H, W, 1}), c.norm, c.q,
+                                          c.p);
         backend::device_synchronize();
         readback_f(g_tight, d, B * N);
     }

@@ -23,10 +23,12 @@ using backend::MemcpyKind;
 struct DensifyUpdateWeightParams {
     uint64_t radii, opacs, accum_weight, accum_weight2, accum_buffer;
     float blend_w;
+    float score_power;
     int32_t score_mode;
     uint32_t use_opacs, use_w2, num_splats, wgs_per_row;
+    uint32_t _pad0;
 };
-static_assert(sizeof(DensifyUpdateWeightParams) == 5 * 8 + 6 * 4,
+static_assert(sizeof(DensifyUpdateWeightParams) == 5 * 8 + 8 * 4,
               "params layout must match the slang struct");
 
 // Mirrors DensifyClipScaleParams.
@@ -96,17 +98,27 @@ struct AccumFinalizeParams {
 };
 static_assert(sizeof(AccumFinalizeParams) == 8 + 2 * 4, "params layout");
 
-struct ScorePairParams {  // gather and clip share this shape
+struct ScorePairParams {  // densify_gather_score
     uint64_t accum_buffer, other;
     uint32_t num_splats, wgs_per_row;
 };
 static_assert(sizeof(ScorePairParams) == 2 * 8 + 2 * 4, "params layout");
 
+// Mirrors ScoreClipParams.
+struct ScoreClipParams {
+    uint64_t accum_buffer, cutoff, score_out;
+    float power;
+    uint32_t use_cutoff, use_out, num_splats, wgs_per_row;
+    uint32_t _pad0;
+};
+static_assert(sizeof(ScoreClipParams) == 3 * 8 + 6 * 4,
+              "params layout must match the slang struct");
+
 // Mirrors NormalizeClipMapParams.
 struct NormalizeClipMapParams {
     uint64_t data, inv_median, clip;
     uint32_t B, N, use_median, use_clip, wgs_per_row;
-    uint32_t _pad0;
+    float power;
 };
 static_assert(sizeof(NormalizeClipMapParams) == 3 * 8 + 6 * 4,
               "params layout must match the slang struct");
@@ -421,6 +433,7 @@ void densify_update_weight(
     DeviceVector<float> accum_weight,
     DeviceVector<float> accum_weight2,
     float blend_w,
+    float score_power,
     DeviceVector<float2> accum_buffer,
     int score_mode
 ) {
@@ -433,6 +446,7 @@ void densify_update_weight(
     p.accum_weight2 = vkk::or_fallback(accum_weight2.data_ptr());
     p.accum_buffer = (uint64_t)accum_buffer.data_ptr();
     p.blend_w = blend_w;
+    p.score_power = score_power;
     p.score_mode = score_mode;
     p.use_opacs = opacs_ptr ? 1u : 0u;
     p.use_w2 = accum_weight2.data_ptr() ? 1u : 0u;
@@ -568,6 +582,7 @@ void relocate_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
+    DeviceVector<float2> sample_weights,
     DeviceVector<int32_t> bias_correction_steps,
     int sh_optim_bits,
     int num_sh,
@@ -612,7 +627,10 @@ void relocate_splats_with_long_axis_split_tensor(
     if (num_relocate == 0) return;
 
     const int32_t* src_indices = wswr_sample(
-        cur_num_splats, (const float*)densify_accum_buffer.data_ptr(),
+        cur_num_splats,
+        (const float*)(sample_weights.data_ptr()
+                           ? sample_weights.data_ptr()
+                           : densify_accum_buffer.data_ptr()),
         mask.data_ptr(), (uint32_t)num_relocate, seed);
 
     launch_relocate_las(cur_num_splats, num_relocate, split_opacity_k,
@@ -639,6 +657,7 @@ void add_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
+    DeviceVector<float2> sample_weights,
     DeviceVector<int32_t> bias_correction_steps,
     int sh_optim_bits,
     int num_sh,
@@ -657,7 +676,10 @@ void add_splats_with_long_axis_split_tensor(
                    "add_splats_las");
 
     const int32_t* split_indices = wswr_sample(
-        cur_num_splats, (const float*)densify_accum_buffer.data_ptr(),
+        cur_num_splats,
+        (const float*)(sample_weights.data_ptr()
+                           ? sample_weights.data_ptr()
+                           : densify_accum_buffer.data_ptr()),
         nullptr, (uint32_t)num_new_splats, seed);
 
     launch_relocate_las(cur_num_splats, num_new_splats, split_opacity_k,
@@ -864,10 +886,11 @@ int batch_quantile_positive_radix_select(const float* d_x, int B, int N,
 void normalize_clip_map_inplace_tensor(
     TorchTensorView data,
     bool normalize_median,
-    float clip_quantile
+    float clip_quantile,
+    float power
 ) {
     const bool do_clip = (clip_quantile > 0.0f && clip_quantile < 1.0f);
-    if (!normalize_median && !do_clip) return;
+    if (!normalize_median && !do_clip && power == 1.0f) return;
     float* ptr = (float*)std::get<0>(data);
     if (ptr == nullptr) return;
     const auto& shape = std::get<2>(data);
@@ -902,6 +925,7 @@ void normalize_clip_map_inplace_tensor(
     p.N = (uint32_t)N;
     p.use_median = normalize_median ? 1u : 0u;
     p.use_clip = do_clip ? 1u : 0u;
+    p.power = power;
     vkk::dispatch_flat("densify.normalize_clip_map", {}, total, 256, &p,
                        sizeof(p), &p.wgs_per_row);
 }
@@ -919,31 +943,45 @@ void densify_accum_finalize_tensor(int64_t num_splats,
 
 void densify_clip_score_tensor(int64_t num_splats,
                                DeviceVector<float2> accum_buffer,
-                               float quantile) {
+                               float quantile,
+                               float power,
+                               DeviceVector<float2> score_out) {
     if (num_splats <= 0 || accum_buffer.data_ptr() == nullptr) return;
-    if (!(quantile > 0.0f && quantile < 1.0f)) return;
+    const bool do_clip = (quantile > 0.0f && quantile < 1.0f);
+    float2* out = score_out.data_ptr();
+    if (!do_clip && out == nullptr) return;
 
-    // The selector wants a contiguous row, and .x is strided; gather first.
-    float* gathered = DevicePool::global().acquire<float>(
-        PoolSlot::DensifyScoreGather, (size_t)num_splats);
-    float* cutoff =
-        DevicePool::global().acquire<float>(PoolSlot::DensifyScoreClip, 1);
-    float* temp = DevicePool::global().acquire<float>(
-        PoolSlot::DensifyQuantileTemp, 1024);
+    float* cutoff = nullptr;
+    if (do_clip) {
+        // The selector wants a contiguous row, and .x is strided; gather first.
+        float* gathered = DevicePool::global().acquire<float>(
+            PoolSlot::DensifyScoreGather, (size_t)num_splats);
+        cutoff =
+            DevicePool::global().acquire<float>(PoolSlot::DensifyScoreClip, 1);
+        float* temp = DevicePool::global().acquire<float>(
+            PoolSlot::DensifyQuantileTemp, 1024);
 
-    ScorePairParams p{};
+        ScorePairParams gp{};
+        gp.accum_buffer = (uint64_t)accum_buffer.data_ptr();
+        gp.other = (uint64_t)gathered;
+        gp.num_splats = (uint32_t)num_splats;
+        vkk::dispatch_flat("densify.densify_gather_score", {}, num_splats, 256,
+                           &gp, sizeof(gp), &gp.wgs_per_row);
+
+        batch_quantile_positive_radix_select<false>(gathered, 1,
+                                                    (int)num_splats, quantile,
+                                                    cutoff, (uint32_t*)temp,
+                                                    backend::kDefaultStream);
+    }
+
+    ScoreClipParams p{};
     p.accum_buffer = (uint64_t)accum_buffer.data_ptr();
-    p.other = (uint64_t)gathered;
+    p.cutoff = vkk::or_fallback(cutoff);
+    p.score_out = vkk::or_fallback(out);
+    p.power = power;
+    p.use_cutoff = cutoff ? 1u : 0u;
+    p.use_out = out ? 1u : 0u;
     p.num_splats = (uint32_t)num_splats;
-    vkk::dispatch_flat("densify.densify_gather_score", {}, num_splats, 256, &p,
-                       sizeof(p), &p.wgs_per_row);
-
-    batch_quantile_positive_radix_select<false>(gathered, 1, (int)num_splats,
-                                                quantile, cutoff,
-                                                (uint32_t*)temp,
-                                                backend::kDefaultStream);
-
-    p.other = (uint64_t)cutoff;
     vkk::dispatch_flat("densify.densify_clip_score", {}, num_splats, 256, &p,
                        sizeof(p), &p.wgs_per_row);
 }

@@ -101,6 +101,7 @@ static std::map<std::string, float> _engine_step_fwd_bwd_only(
         cfg.loss.nms_falloff,
         cfg.loss.loss_map_normalize,
         cfg.loss.loss_map_clip_quantile,
+        cfg.loss.loss_map_power,
         cfg.loss.loss_map_accum_mode,
         cfg.loss.overexposure_reg_weight,
         cfg.loss.color_shift_reg_weight,

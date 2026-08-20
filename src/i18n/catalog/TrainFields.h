@@ -3548,6 +3548,71 @@ SS_MSG(densify_loss_map_clip_quantile_help,
        "böylece bir avuç uç piksel her yeni splat'ı kendine çekemez. 1 hiç kesmez "
        "ve maliyeti yoktur; 0,99 her fotoğrafın en kötü yüzde birini budar."));
 
+SS_MSG(densify_loss_map_power,
+    EN("Error contrast"), JA("誤差のコントラスト"),
+    ZH_HANS("误差对比度"), ZH_HANT("誤差對比度"), KO("오차 대비"),
+    DE("Fehlerkontrast"),
+    FR("Contraste de l'erreur"),
+    ES("Contraste del error"),
+    PT("Contraste do erro"),
+    IT("Contrasto dell'errore"),
+    NL("Foutcontrast"),
+    RU("Контраст ошибки"),
+    TR("Hata karşıtlığı"));
+SS_MSG(densify_loss_map_power_help,
+    EN("Raise every pixel's detail error to this power before splats are scored by "
+       "it. Above 1 sharpens the contrast between good and bad pixels, so new "
+       "splats crowd into the worst spots; below 1 flattens it and spreads them "
+       "out. 1 leaves the error as it is."),
+    JA("スプラットの点数を付ける前に、各画素の細部の誤差をこの指数で累乗します。"
+       "1 より大きいと良い画素と悪い画素の差が強調され、新しいスプラットがいちばん"
+       "悪い場所に集まります。1 より小さいと差がならされて広く散ります。1 は誤差を"
+       "そのまま使います。"),
+    ZH_HANS("在用细节误差给泼溅打分之前，先把每个像素的误差取这个次方。大于 1 会"
+            "放大好像素与差像素之间的差距，新泼溅会集中到最差的地方；小于 1 会削平"
+            "差距，让它们散开。1 表示保持误差原样。"),
+    ZH_HANT("在用細節誤差給潑濺打分之前，先把每個像素的誤差取這個次方。大於 1 會"
+            "放大好像素與差像素之間的差距，新潑濺會集中到最差的地方；小於 1 會削平"
+            "差距，讓它們散開。1 表示保持誤差原樣。"),
+    KO("스플랫에 점수를 매기기 전에 각 화소의 디테일 오차를 이 거듭제곱만큼 올립"
+       "니다. 1보다 크면 좋은 화소와 나쁜 화소의 차이가 커져 새 스플랫이 가장 "
+       "나쁜 곳으로 몰리고, 1보다 작으면 차이가 평평해져 넓게 퍼집니다. 1은 오차를 "
+       "그대로 둡니다."),
+    DE("Den Detailfehler jedes Pixels mit dieser Potenz versehen, bevor Splats "
+       "danach bewertet werden. Über 1 verschärft den Kontrast zwischen guten und "
+       "schlechten Pixeln, sodass neue Splats sich an den schlimmsten Stellen "
+       "drängen; unter 1 ebnet ihn ein und verteilt sie. 1 lässt den Fehler, wie "
+       "er ist."),
+    FR("Élever l'erreur de détail de chaque pixel à cette puissance avant que les "
+       "splats en soient notés. Au-dessus de 1, le contraste entre bons et mauvais "
+       "pixels se durcit et les nouveaux splats se pressent aux pires endroits ; "
+       "en dessous de 1, il s'aplatit et ils se dispersent. 1 laisse l'erreur "
+       "telle quelle."),
+    ES("Elevar el error de detalle de cada píxel a esta potencia antes de puntuar "
+       "los splats con él. Por encima de 1 se acentúa el contraste entre píxeles "
+       "buenos y malos, y los splats nuevos se agolpan en los peores sitios; por "
+       "debajo de 1 se aplana y se reparten. 1 deja el error tal cual."),
+    PT("Elevar o erro de detalhe de cada pixel a esta potência antes de pontuar os "
+       "splats com ele. Acima de 1 acentua o contraste entre pixels bons e maus, e "
+       "os splats novos amontoam-se nos piores sítios; abaixo de 1 achata-o e eles "
+       "espalham-se. 1 deixa o erro como está."),
+    IT("Elevare l'errore di dettaglio di ogni pixel a questa potenza prima che gli "
+       "splat vengano valutati su di esso. Sopra 1 il contrasto fra pixel buoni e "
+       "cattivi si accentua e i nuovi splat si accalcano nei punti peggiori; sotto "
+       "1 si appiattisce e si distribuiscono. 1 lascia l'errore com'è."),
+    NL("De detailfout van elke pixel tot deze macht verheffen voordat splats "
+       "erop worden beoordeeld. Boven 1 wordt het verschil tussen goede en slechte "
+       "pixels scherper en dringen nieuwe splats samen op de slechtste plekken; "
+       "onder 1 vlakt het af en spreiden ze zich. 1 laat de fout zoals ze is."),
+    RU("Возводить ошибку детализации каждого пикселя в эту степень, прежде чем по "
+       "ней оцениваются сплаты. Больше 1 усиливает разницу между хорошими и плохими "
+       "пикселями, и новые сплаты сбиваются в худшие места; меньше 1 сглаживает её, "
+       "и они расходятся. 1 оставляет ошибку как есть."),
+    TR("Splat'lar buna göre puanlanmadan önce her pikselin ayrıntı hatasını bu "
+       "kuvvete yükseltir. 1'in üstünde iyi ve kötü pikseller arasındaki fark "
+       "keskinleşir, yeni splat'lar en kötü noktalara toplanır; 1'in altında fark "
+       "düzleşir ve dağılırlar. 1 hatayı olduğu gibi bırakır."));
+
 SS_MSG(densify_accum_mode,
     EN("Combine error over a photo"), JA("写真内での誤差のまとめ方"),
     ZH_HANS("单张照片内的误差合并方式"), ZH_HANT("單張照片內的誤差合併方式"),
@@ -3622,6 +3687,72 @@ SS_MSG(densify_accum_mode_help,
        "`avg` örttüğü alanın ortalamasını alır ve büyük ile küçük splat'ları aynı "
        "ölçüyle değerlendirir."));
 
+SS_MSG(densify_score_power,
+    EN("Splat score contrast"), JA("スプラット点数のコントラスト"),
+    ZH_HANS("泼溅分数对比度"), ZH_HANT("潑濺分數對比度"), KO("스플랫 점수 대비"),
+    DE("Kontrast der Splat-Bewertung"),
+    FR("Contraste des notes de splat"),
+    ES("Contraste de la puntuación de splats"),
+    PT("Contraste da pontuação dos splats"),
+    IT("Contrasto del punteggio degli splat"),
+    NL("Contrast van de splatscore"),
+    RU("Контраст оценки сплатов"),
+    TR("Splat puanı karşıtlığı"));
+SS_MSG(densify_score_power_help,
+    EN("Raise each splat's score for one step to this power before it is averaged "
+       "over the steps between refinements. Above 1 lets a single bad photo carry "
+       "a splat's score; below 1 makes a splat have to look bad in many photos "
+       "before it counts. 1 leaves the score as it is."),
+    JA("リファインメントの間のステップで平均する前に、1 ステップ分のスプラットの"
+       "点数をこの指数で累乗します。1 より大きいと写真 1 枚の悪さでそのスプラット"
+       "の点数が決まり、1 より小さいと多くの写真で悪く見えないと効きません。1 は"
+       "点数をそのまま使います。"),
+    ZH_HANS("在把两次细化之间各步的分数取平均之前，先把单步的泼溅分数取这个次"
+            "方。大于 1 时，一张很差的照片就能决定该泼溅的分数；小于 1 时，泼溅"
+            "要在很多照片里都表现差才算数。1 表示保持分数原样。"),
+    ZH_HANT("在把兩次細化之間各步的分數取平均之前，先把單步的潑濺分數取這個次"
+            "方。大於 1 時，一張很差的照片就能決定該潑濺的分數；小於 1 時，潑濺"
+            "要在很多照片裡都表現差才算數。1 表示保持分數原樣。"),
+    KO("정제 사이의 스텝들에 대해 평균 내기 전에, 한 스텝의 스플랫 점수를 이 "
+       "거듭제곱만큼 올립니다. 1보다 크면 나쁜 사진 한 장이 그 스플랫의 점수를 "
+       "좌우하고, 1보다 작으면 여러 사진에서 나빠야 점수에 반영됩니다. 1은 점수를 "
+       "그대로 둡니다."),
+    DE("Die Bewertung eines Splats für einen Schritt mit dieser Potenz versehen, "
+       "bevor sie über die Schritte zwischen zwei Verfeinerungen gemittelt wird. "
+       "Über 1 kann ein einziges schlechtes Foto die Bewertung tragen; unter 1 "
+       "muss ein Splat in vielen Fotos schlecht aussehen, um zu zählen. 1 lässt "
+       "die Bewertung, wie sie ist."),
+    FR("Élever à cette puissance la note d'un splat pour une étape avant qu'elle "
+       "soit moyennée sur les étapes entre deux raffinements. Au-dessus de 1, une "
+       "seule mauvaise photo suffit à porter la note ; en dessous de 1, le splat "
+       "doit paraître mauvais sur beaucoup de photos pour compter. 1 laisse la "
+       "note telle quelle."),
+    ES("Elevar a esta potencia la puntuación de cada splat en un paso antes de "
+       "promediarla sobre los pasos entre refinamientos. Por encima de 1, una sola "
+       "foto mala basta para sostener la puntuación; por debajo de 1, el splat "
+       "tiene que verse mal en muchas fotos para contar. 1 deja la puntuación tal "
+       "cual."),
+    PT("Elevar a esta potência a pontuação de cada splat num passo antes de ser "
+       "medida sobre os passos entre refinamentos. Acima de 1, uma única foto má "
+       "chega para sustentar a pontuação; abaixo de 1, o splat tem de parecer mau "
+       "em muitas fotos para contar. 1 deixa a pontuação como está."),
+    IT("Elevare a questa potenza il punteggio di uno splat in un passo prima che "
+       "venga mediato sui passi fra due raffinamenti. Sopra 1 basta una sola foto "
+       "cattiva a reggere il punteggio; sotto 1 lo splat deve apparire cattivo in "
+       "molte foto per contare. 1 lascia il punteggio com'è."),
+    NL("De score van een splat in één stap tot deze macht verheffen voordat ze "
+       "wordt gemiddeld over de stappen tussen twee verfijningen. Boven 1 kan één "
+       "slechte foto de score dragen; onder 1 moet een splat er in veel foto's "
+       "slecht uitzien om mee te tellen. 1 laat de score zoals ze is."),
+    RU("Возводить оценку сплата за один шаг в эту степень, прежде чем усреднять её "
+       "по шагам между уточнениями. Больше 1 — одного плохого кадра хватает, чтобы "
+       "вытянуть оценку; меньше 1 — сплат должен выглядеть плохо на многих кадрах, "
+       "чтобы это засчиталось. 1 оставляет оценку как есть."),
+    TR("Bir splat'ın tek adımdaki puanını, iki iyileştirme arasındaki adımlar "
+       "boyunca ortalanmadan önce bu kuvvete yükseltir. 1'in üstünde tek bir kötü "
+       "fotoğraf puanı taşıyabilir; 1'in altında splat'ın sayılması için birçok "
+       "fotoğrafta kötü görünmesi gerekir. 1 puanı olduğu gibi bırakır."));
+
 SS_MSG(densify_score_clip_quantile,
     EN("Score spike cutoff"), JA("点数スパイクの上限"),
     ZH_HANS("分数尖峰上限"), ZH_HANT("分數尖峰上限"), KO("점수 급등 상한"),
@@ -3684,6 +3815,68 @@ SS_MSG(densify_score_clip_quantile_help,
        "kontrolden çıkmış splat yeni splat'ların tümünü yutamaz. Hata fotoğraf "
        "başına ve adımlar arasında birleştirildikten sonra uygulanır ve iyileştirme "
        "puanı görünümünün çizdiği de budur. 1 hiç kesmez ve maliyeti yoktur."));
+
+SS_MSG(densify_final_score_power,
+    EN("Splat pick sharpness"), JA("スプラット選択の鋭さ"),
+    ZH_HANS("泼溅挑选的集中度"), ZH_HANT("潑濺挑選的集中度"), KO("스플랫 선택의 예리함"),
+    DE("Schärfe der Splat-Auswahl"),
+    FR("Netteté du tirage des splats"),
+    ES("Nitidez de la elección de splats"),
+    PT("Nitidez da escolha dos splats"),
+    IT("Nitidezza della scelta degli splat"),
+    NL("Scherpte van de splatkeuze"),
+    RU("Резкость отбора сплатов"),
+    TR("Splat seçiminin keskinliği"));
+SS_MSG(densify_final_score_power_help,
+    EN("Raise the finished per-splat score to this power just before the draw that "
+       "picks which splats to split. Above 1 concentrates new detail on the "
+       "highest-scoring splats; below 1 spreads it more evenly over the scene. "
+       "1 draws straight from the score."),
+    JA("どのスプラットを分割するかを選ぶ抽選の直前に、出来上がったスプラットごとの"
+       "点数をこの指数で累乗します。1 より大きいと新しい細部が点数の高いスプラット"
+       "に集まり、1 より小さいとシーン全体に均されます。1 は点数のまま抽選します。"),
+    ZH_HANS("在抽选要分裂哪些泼溅之前，把算好的每个泼溅的分数取这个次方。大于 1 "
+            "会把新增细节集中到分数最高的泼溅上；小于 1 会让细节在场景里分布得更"
+            "均匀。1 表示直接按分数抽选。"),
+    ZH_HANT("在抽選要分裂哪些潑濺之前，把算好的每個潑濺的分數取這個次方。大於 1 "
+            "會把新增細節集中到分數最高的潑濺上；小於 1 會讓細節在場景裡分布得更"
+            "均勻。1 表示直接按分數抽選。"),
+    KO("어떤 스플랫을 나눌지 뽑기 직전에, 완성된 스플랫별 점수를 이 거듭제곱"
+       "만큼 올립니다. 1보다 크면 새 디테일이 점수가 높은 스플랫에 몰리고, 1보다 "
+       "작으면 장면 전체에 고르게 퍼집니다. 1은 점수 그대로 뽑습니다."),
+    DE("Die fertige Bewertung je Splat mit dieser Potenz versehen, direkt vor der "
+       "Ziehung, die entscheidet, welche Splats geteilt werden. Über 1 bündelt "
+       "neues Detail auf den am höchsten bewerteten Splats; unter 1 verteilt es "
+       "sich gleichmäßiger über die Szene. 1 zieht direkt aus der Bewertung."),
+    FR("Élever la note finale de chaque splat à cette puissance juste avant le "
+       "tirage qui choisit les splats à diviser. Au-dessus de 1, le détail neuf se "
+       "concentre sur les splats les mieux notés ; en dessous de 1, il se répartit "
+       "plus également sur la scène. 1 tire directement d'après la note."),
+    ES("Elevar a esta potencia la puntuación final de cada splat justo antes del "
+       "sorteo que elige qué splats dividir. Por encima de 1 el detalle nuevo se "
+       "concentra en los splats mejor puntuados; por debajo de 1 se reparte más "
+       "por la escena. 1 sortea directamente según la puntuación."),
+    PT("Elevar a esta potência a pontuação final de cada splat mesmo antes do "
+       "sorteio que escolhe quais splats dividir. Acima de 1 o detalhe novo "
+       "concentra-se nos splats com pontuação mais alta; abaixo de 1 espalha-se "
+       "mais pela cena. 1 sorteia diretamente pela pontuação."),
+    IT("Elevare a questa potenza il punteggio finale di ogni splat subito prima "
+       "dell'estrazione che sceglie quali splat dividere. Sopra 1 il dettaglio "
+       "nuovo si concentra sugli splat con il punteggio più alto; sotto 1 si "
+       "distribuisce più uniformemente sulla scena. 1 estrae direttamente dal "
+       "punteggio."),
+    NL("De uiteindelijke score per splat tot deze macht verheffen vlak voor de "
+       "trekking die bepaalt welke splats worden gesplitst. Boven 1 komt nieuw "
+       "detail samen op de hoogst scorende splats; onder 1 verdeelt het zich "
+       "gelijkmatiger over de scène. 1 trekt rechtstreeks uit de score."),
+    RU("Возводить итоговую оценку каждого сплата в эту степень прямо перед "
+       "жеребьёвкой, которая выбирает сплаты для деления. Больше 1 — новая "
+       "детализация собирается на сплатах с высшими оценками; меньше 1 — "
+       "расходится по сцене ровнее. 1 тянет прямо по оценке."),
+    TR("Hangi splat'ların bölüneceğini seçen çekilişin hemen öncesinde, splat "
+       "başına biten puanı bu kuvvete yükseltir. 1'in üstünde yeni ayrıntı en "
+       "yüksek puanlı splat'larda toplanır; 1'in altında sahneye daha eşit "
+       "dağılır. 1 doğrudan puana göre çeker."));
 
 SS_MSG(use_long_axis_split,
     EN("Split along the long axis"), JA("長い軸で分割する"),

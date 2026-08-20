@@ -323,6 +323,7 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
     cfg.loss.nms_falloff = c.densify_nms_falloff;
     cfg.loss.loss_map_normalize = c.densify_loss_map_normalize;
     cfg.loss.loss_map_clip_quantile = c.densify_loss_map_clip_quantile;
+    cfg.loss.loss_map_power = c.densify_loss_map_power;
     cfg.loss.loss_map_accum_mode = densify_accum_mode_int(c.densify_accum_mode);
     cfg.loss.overexposure_reg_weight = c.overexposure_reg;
     if (st.bilagrid_rgb_init || st.ppisp_init) {
@@ -382,7 +383,9 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
         : c.densify_score_mode == "max" ? 1
         : c.densify_score_mode == "median" ? 2 : 3;
     cfg.densify.score_blend_world_grad = c.densify_score_blend_world_grad;
+    cfg.densify.score_power = c.densify_score_power;
     cfg.densify.score_clip_quantile = c.densify_score_clip_quantile;
+    cfg.densify.final_score_power = c.densify_final_score_power;
     cfg.densify.las_split_opacity_k_init   = c.long_axis_split_opacity_k[0];
     cfg.densify.las_split_opacity_k_final  = c.long_axis_split_opacity_k[1];
     cfg.densify.las_split_opacity_k_warmup = (int)c.long_axis_split_opacity_k[2];

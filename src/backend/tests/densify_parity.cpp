@@ -374,7 +374,8 @@ int main(int argc, char** argv) {
             dv<float3>(m.sh_optim_bits == 32 ? (void*)m.g2_sh
                                              : (void*)m.sh_state_packed,
                        0),
-            dv<float2>(m.accum, CAP), dv<int32_t>(m.bias_steps, CAP),
+            dv<float2>(m.accum, CAP), DeviceVector<float2>{},
+            dv<int32_t>(m.bias_steps, CAP),
             m.sh_optim_bits, (int)m.num_sh,
             dv<float4>(m.sh_state_bounds, m.sh_state_bound_f / 4),
             m.bounds_per_splat, dv<uint8_t>(m.sh_value_packed,
@@ -408,7 +409,8 @@ int main(int argc, char** argv) {
             dv<float3>(m.sh_optim_bits == 32 ? (void*)m.g2_sh
                                              : (void*)m.sh_state_packed,
                        0),
-            dv<float2>(m.accum, CAP), dv<int32_t>(m.bias_steps, CAP),
+            dv<float2>(m.accum, CAP), DeviceVector<float2>{},
+            dv<int32_t>(m.bias_steps, CAP),
             m.sh_optim_bits, (int)m.num_sh,
             dv<float4>(m.sh_state_bounds, m.sh_state_bound_f / 4),
             m.bounds_per_splat, dv<uint8_t>(m.sh_value_packed,

@@ -151,6 +151,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     // In-place post-processing of the finished loss map (see LossConfig).
     bool loss_map_normalize,
     float loss_map_clip_quantile,
+    float loss_map_power,
     // DensifyAccumMode as an int (see LossConfig::loss_map_accum_mode).
     int loss_map_accum_mode,
     // Image-space overexposure regularization weight (see LossConfig).

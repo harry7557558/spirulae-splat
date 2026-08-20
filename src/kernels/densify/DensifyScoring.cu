@@ -220,6 +220,7 @@ __global__ void densify_update_weight_kernel(
     const float* __restrict__ accum_weight,  // [N]
     const float* __restrict__ accum_weight2,  // [N], optional blend partner
     float blend_w,  // weight of accum_weight2 in the geometric blend
+    float score_power,  // exponent on this step's score, before the accumulator
     float2* __restrict__ accum_buffer  // [N, 2]
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -246,6 +247,8 @@ __global__ void densify_update_weight_kernel(
         weight *= accum_weight_scalar[0];
     if (weight == 0.0f)
         return;
+    if (score_power != 1.0f)
+        weight = powf(weight, score_power);
 
     float2 accum = accum_buffer[idx];
     if (score_mode == (int)DensifyScoreMode::Max) {
@@ -310,44 +313,67 @@ __global__ void densify_gather_score_kernel(
     out[idx] = accum_buffer[idx].x;
 }
 
+// The clip stays in place -- it is idempotent, so re-running it every step
+// does not ratchet. The power is NOT, so it lands in `score_out` and leaves
+// the running accumulator the update kernel reads next step alone.
 __global__ void densify_clip_score_kernel(
     long num_splats,
+    float power,
     float2* __restrict__ accum_buffer,
-    const float* __restrict__ cutoff  // [1]
+    const float* __restrict__ cutoff,  // [1], null to skip
+    float2* __restrict__ score_out     // [N], null to skip
 ) {
     long idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_splats)
         return;
-    float c = cutoff[0];
-    float v = accum_buffer[idx].x;
-    // !(v <= c) also catches NaN, which would otherwise survive every ranking.
-    if (c > 0.0f && !(v <= c))
-        accum_buffer[idx].x = c;
+    float2 a = accum_buffer[idx];
+    float v = a.x;
+    if (cutoff != nullptr) {
+        float c = cutoff[0];
+        // !(v <= c) also catches NaN, which would otherwise survive every ranking.
+        if (c > 0.0f && !(v <= c)) {
+            v = c;
+            accum_buffer[idx].x = c;
+        }
+    }
+    if (score_out != nullptr) {
+        if (power != 1.0f)
+            v = powf(fmaxf(v, 0.0f), power);
+        score_out[idx] = make_float2(v, a.y);
+    }
 }
 
 /*[AutoHeaderGeneratorExport]*/
 void densify_clip_score_tensor(
     int64_t num_splats,
     DeviceVector<float2> accum_buffer,  // [N, 2]; only .x is clipped
-    float quantile
+    float quantile,
+    float power,
+    DeviceVector<float2> score_out  // [N, 2], optional: clipped .x ^ power
 ) {
     if (num_splats <= 0 || accum_buffer.data_ptr() == nullptr)
         return;
-    if (!(quantile > 0.0f && quantile < 1.0f))
+    const bool do_clip = (quantile > 0.0f && quantile < 1.0f);
+    float2* out = score_out.data_ptr();
+    if (!do_clip && out == nullptr)
         return;
-    // The selector wants a contiguous row, and .x is strided; gather first.
-    float* gathered = DevicePool::global().acquire<float>(
-        PoolSlot::DensifyScoreGather, (size_t)num_splats);
-    float* cutoff = DevicePool::global().acquire<float>(
-        PoolSlot::DensifyScoreClip, 1);
-    densify_gather_score_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
-        (long)num_splats, accum_buffer.data_ptr(), gathered);
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    quantile_of_positive_finite_elements_internal(
-        gathered, 1, (int)num_splats, quantile, /*return_reciprocal=*/false,
-        /*abs_input=*/false, cutoff);
+
+    float* cutoff = nullptr;
+    if (do_clip) {
+        // The selector wants a contiguous row, and .x is strided; gather first.
+        float* gathered = DevicePool::global().acquire<float>(
+            PoolSlot::DensifyScoreGather, (size_t)num_splats);
+        cutoff = DevicePool::global().acquire<float>(
+            PoolSlot::DensifyScoreClip, 1);
+        densify_gather_score_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+            (long)num_splats, accum_buffer.data_ptr(), gathered);
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+        quantile_of_positive_finite_elements_internal(
+            gathered, 1, (int)num_splats, quantile, /*return_reciprocal=*/false,
+            /*abs_input=*/false, cutoff);
+    }
     densify_clip_score_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
-        (long)num_splats, accum_buffer.data_ptr(), cutoff);
+        (long)num_splats, power, accum_buffer.data_ptr(), cutoff, out);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -361,6 +387,7 @@ void densify_update_weight(
     DeviceVector<float> accum_weight,
     DeviceVector<float> accum_weight2,
     float blend_w,
+    float score_power,
     DeviceVector<float2> accum_buffer,
     int score_mode
 ) {
@@ -373,6 +400,7 @@ void densify_update_weight(
         accum_weight.data_ptr(),
         accum_weight2.data_ptr(),
         blend_w,
+        score_power,
         accum_buffer.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());

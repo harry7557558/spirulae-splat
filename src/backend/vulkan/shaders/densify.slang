@@ -47,18 +47,20 @@ bool _dn_finitef(float v) {
 // never null-pointer-gated (see KernelCommon.h null_fallback). The CUDA
 // kernel's accum_weight_scalar input is dropped: the launch API always
 // passes null for it.
-struct DensifyUpdateWeightParams {  // 64 bytes: pushed directly
+struct DensifyUpdateWeightParams {  // 72 bytes: pushed directly
     float* radii;         // [N]
     float* opacs;         // [N] logit-space (use_opacs gates)
     float* accum_weight;  // [N]
     float* accum_weight2; // [N] blend partner (use_w2 gates)
     float2* accum_buffer; // [N, 2] (score, count)
     float blend_w;
+    float score_power;
     int score_mode;
     uint use_opacs;
     uint use_w2;
     uint num_splats;
     uint wgs_per_row;
+    uint _pad0;
 };
 
 [shader("compute")]
@@ -78,6 +80,7 @@ void densify_update_weight(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     }
     if (p.use_opacs != 0) weight *= _dn_sigmoid(p.opacs[idx]);
     if (weight == 0.0f) return;
+    if (p.score_power != 1.0f) weight = pow(weight, p.score_power);
 
     float2 accum = p.accum_buffer[idx];
     if (p.score_mode == 1) {  // Max
@@ -1095,7 +1098,7 @@ struct NormalizeClipMapParams {  // 48 bytes: pushed directly
     float* clip;        // [B] (use_clip gates)
     uint B, N;
     uint use_median, use_clip, wgs_per_row;
-    uint _pad0;
+    float power;
 };
 
 [shader("compute")]
@@ -1112,6 +1115,10 @@ void normalize_clip_map(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     }
     if (p.use_median != 0)
         v *= p.inv_median[b];
+    // Floored before the power: the flat-region background is tiny negative
+    // noise, and a fractional power of it is NaN (see DensifySampling.cu).
+    if (p.power != 1.0f)
+        v = pow(max(v, 0.0f), p.power);
     p.data[idx] = v;
 }
 
@@ -1150,20 +1157,35 @@ void densify_gather_score(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     p.out[idx] = p.accum_buffer[idx].x;
 }
 
-struct ScoreClipParams {  // 24 bytes: pushed directly
+struct ScoreClipParams {  // 48 bytes: pushed directly
     float2* accum_buffer;
-    float* cutoff;  // [1]
-    uint num_splats, wgs_per_row;
+    float* cutoff;      // [1] (use_cutoff gates)
+    float2* score_out;  // [N] (use_out gates)
+    float power;
+    uint use_cutoff, use_out, num_splats, wgs_per_row;
+    uint _pad0;
 };
 
+// The clip is in place and idempotent; the power is not, so it lands in
+// score_out (see DensifyScoring.cu).
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void densify_clip_score(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                         uniform ScoreClipParams p) {
     uint idx = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
     if (idx >= p.num_splats) return;
-    float c = p.cutoff[0];
-    float v = p.accum_buffer[idx].x;
-    // !(v <= c) also catches NaN, which would otherwise survive every ranking.
-    if (c > 0.0f && !(v <= c)) p.accum_buffer[idx].x = c;
+    float2 a = p.accum_buffer[idx];
+    float v = a.x;
+    if (p.use_cutoff != 0) {
+        float c = p.cutoff[0];
+        // !(v <= c) also catches NaN, which would otherwise survive every ranking.
+        if (c > 0.0f && !(v <= c)) {
+            v = c;
+            p.accum_buffer[idx].x = c;
+        }
+    }
+    if (p.use_out != 0) {
+        if (p.power != 1.0f) v = pow(max(v, 0.0f), p.power);
+        p.score_out[idx] = float2(v, a.y);
+    }
 }

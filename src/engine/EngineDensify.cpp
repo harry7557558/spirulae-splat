@@ -246,15 +246,23 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             score,
             score2,
             blend_w,
+            cfg.score_power,
             dv_accum_buf,
             cfg.score_mode
         );
 
-        // Clip what densification samples, and what the score preview reads:
-        // both take dv_accum_buf. Clipping above the q-quantile leaves that
-        // quantile where it was, so repeating it every step does not ratchet.
+        // Clipping above the q-quantile leaves that quantile where it was, so
+        // running it in place every step does not ratchet. A power would, so
+        // it lands in the side buffer the draw and the preview then read.
+        auto& dv_sample_score = engine().optim.densify_sample_score;
+        if (cfg.final_score_power != 1.0f)
+            dv_sample_score.resize(PoolSlot::EngDensifySampleScore,
+                                   cur_num_splats);
+        else
+            dv_sample_score = DeviceVector<float2>();
         densify_clip_score_tensor(cur_num_splats, dv_accum_buf,
-                                  cfg.score_clip_quantile);
+                                  cfg.score_clip_quantile,
+                                  cfg.final_score_power, dv_sample_score);
     }
 
     int num_added = 0;
@@ -276,7 +284,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             dv_means, dv_quats, dv_scales, dv_opacs, dv_features_dc, dv_features_sh,
             dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
             dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
-            dv_accum_buf, dv_bias_steps,
+            dv_accum_buf, engine().optim.densify_sample_score, dv_bias_steps,
             sh_optim_bits, num_sh,
             dv_sh_quant_bounds, sh_bounds_per_splat,
             dv_sh_value_packed, dv_sh_value_bounds,
@@ -294,7 +302,8 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 dv_means, dv_quats, dv_scales, dv_opacs, dv_features_dc, dv_features_sh,
                 dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
                 dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
-                dv_accum_buf, dv_bias_steps,
+                dv_accum_buf, engine().optim.densify_sample_score,
+                dv_bias_steps,
                 sh_optim_bits, num_sh,
                 dv_sh_quant_bounds, sh_bounds_per_splat,
                 dv_sh_value_packed, dv_sh_value_bounds,

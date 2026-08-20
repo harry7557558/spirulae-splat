@@ -447,6 +447,7 @@ static std::map<std::string, float> _engine_loss(
     float nms_falloff,
     bool loss_map_normalize,
     float loss_map_clip_quantile,
+    float loss_map_power,
     int loss_map_accum_mode,
     float overexposure_reg_weight,
     float color_shift_reg_weight,
@@ -673,7 +674,8 @@ static std::map<std::string, float> _engine_loss(
     // and the raster backward aggregation read the same picture.
     if (compute_loss_map && _tv_valid(loss_map_buf))
         normalize_clip_map_inplace_tensor(loss_map_buf, loss_map_normalize,
-                                          loss_map_clip_quantile);
+                                          loss_map_clip_quantile,
+                                          loss_map_power);
 
     if (map_only) {
         backend::memcpy_sync((void*)std::get<0>(map_out),
@@ -912,6 +914,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     float nms_falloff,
     bool loss_map_normalize,
     float loss_map_clip_quantile,
+    float loss_map_power,
     int loss_map_accum_mode,
     float overexposure_reg_weight,
     float color_shift_reg_weight,
@@ -921,7 +924,8 @@ std::map<std::string, float> engine_compute_loss_backward(
                         loss_scale_min_pixels, compute_loss_map, loss_map_mode,
                         robust_edge_aware_quantile, nms_falloff,
                         loss_map_normalize,
-                        loss_map_clip_quantile, loss_map_accum_mode,
+                        loss_map_clip_quantile, loss_map_power,
+                        loss_map_accum_mode,
                         overexposure_reg_weight,
                         color_shift_reg_weight, color_shift_reg_beta,
                         _tv_null());
@@ -939,7 +943,8 @@ bool engine_preview_loss_map(const LossConfig& loss, TorchTensorView out) {
                  loss.loss_scale_min_pixels, true, loss.loss_map_mode,
                  loss.robust_edge_aware_quantile, loss.nms_falloff,
                  loss.loss_map_normalize,
-                 loss.loss_map_clip_quantile, loss.loss_map_accum_mode,
+                 loss.loss_map_clip_quantile, loss.loss_map_power,
+                 loss.loss_map_accum_mode,
                  0.0f, 0.0f, 0.0f, out);
     return true;
 }

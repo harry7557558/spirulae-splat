@@ -8,13 +8,18 @@
 
 
 void engine_copy_accum_buffer(TorchTensorView dst) {
-    if (engine().optim.accum_buffer.data_ptr() == nullptr || std::get<0>(dst) == 0)
+    // The preview shows what densification samples, so it follows the
+    // final-score-power side buffer whenever that power is in play.
+    const DeviceVector<float2>& src =
+        engine().optim.densify_sample_score.data_ptr()
+            ? engine().optim.densify_sample_score
+            : engine().optim.accum_buffer;
+    if (src.data_ptr() == nullptr || std::get<0>(dst) == 0)
         return;
     int64_t dst_n = std::get<2>(dst)[0];
-    int64_t src_n = engine().optim.accum_buffer.size();
+    int64_t src_n = src.size();
     int64_t n = std::min(dst_n, src_n);
-    backend::memcpy_sync((void*)std::get<0>(dst),
-               engine().optim.accum_buffer.data_ptr(),
+    backend::memcpy_sync((void*)std::get<0>(dst), src.data_ptr(),
                n * sizeof(float2), backend::MemcpyKind::DeviceToHost);
 }
 

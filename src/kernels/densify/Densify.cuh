@@ -30,7 +30,8 @@ void quantile_of_abs_of_finite_elements_tensor(
 void normalize_clip_map_inplace_tensor(
     TorchTensorView data,  // [B, ...], rows normalized independently
     bool normalize_median,
-    float clip_quantile
+    float clip_quantile,
+    float power
 );
 
 
@@ -97,7 +98,9 @@ void densify_accum_finalize_tensor(
 void densify_clip_score_tensor(
     int64_t num_splats,
     DeviceVector<float2> accum_buffer,  // [N, 2]; only .x is clipped
-    float quantile
+    float quantile,
+    float power,
+    DeviceVector<float2> score_out  // [N, 2], optional: clipped .x ^ power
 );
 
 
@@ -109,6 +112,7 @@ void densify_update_weight(
     DeviceVector<float> accum_weight,
     DeviceVector<float> accum_weight2,
     float blend_w,
+    float score_power,
     DeviceVector<float2> accum_buffer,
     int score_mode
 );
@@ -122,6 +126,10 @@ void relocate_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
+    // Sampling weights, [N, 2] with the score in lane 0; empty falls back to
+    // densify_accum_buffer. Separate so a transformed score can drive the
+    // draw while the kernel still propagates the raw accumulator src -> dst.
+    DeviceVector<float2> sample_weights,
     DeviceVector<int32_t> bias_correction_steps,
     int sh_optim_bits,
     int num_sh,
@@ -153,6 +161,10 @@ void add_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
+    // Sampling weights, [N, 2] with the score in lane 0; empty falls back to
+    // densify_accum_buffer. Separate so a transformed score can drive the
+    // draw while the kernel still propagates the raw accumulator src -> dst.
+    DeviceVector<float2> sample_weights,
     DeviceVector<int32_t> bias_correction_steps,
     int sh_optim_bits,
     int num_sh,

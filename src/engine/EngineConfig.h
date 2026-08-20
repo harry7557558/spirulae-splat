@@ -45,6 +45,10 @@ struct LossConfig {
     // this quantile of the same population. Quantile >= 1 skips the clip.
     bool  loss_map_normalize     = false;
     float loss_map_clip_quantile = 1.0f;
+    // Exponent applied to every pixel of the conditioned map, in the same
+    // pass. Powers commute with both the median divide and the quantile clip
+    // (both are monotone in the pixel value), so the pass order is free.
+    float loss_map_power         = 1.0f;
     // DensifyAccumMode (primitives/Primitive.cuh) as an int: how the raster
     // backward reduces the map to one score per splat. Ignored when the map
     // is off.
@@ -194,10 +198,17 @@ struct DensifyConfig {
     // in between = geometric blend, ranking-invariant to each score's global
     // scale. Requires OptimConfig::write_densify_world_grad_score when > 0.
     float score_blend_world_grad        = 0.0f;
+    // Exponent applied to a step's per-splat score after the image-to-splat
+    // reduction (Avg's divide included) and before the across-step one.
+    float score_power                   = 1.0f;
     // Clips the per-splat score that densification actually samples -- after
     // both the image-to-splat and the across-step reduction -- at this
     // quantile of the positive scores. Outside (0, 1) nothing is clipped.
     float score_clip_quantile           = 1.0f;
+    // Exponent applied after the across-step reduction, on the way to the
+    // sampling draw. Fused into the clip pass but written to a side buffer:
+    // powering the running accumulator in place would compound every step.
+    float final_score_power             = 1.0f;
     // Long-axis-split opacity split factor `k`, linearly scheduled from
     // `las_split_opacity_k_init` to `..._final` over `..._warmup` steps.
     float las_split_opacity_k_init      = 0.5f;

@@ -78,6 +78,7 @@ void quantile_of_abs_of_finite_elements_tensor(
 __global__ void _normalize_clip_map_kernel(
     int64_t total,
     int N,
+    float power,
     float* __restrict__ data,
     const float* __restrict__ inv_median,  // [B], null to skip
     const float* __restrict__ clip         // [B], null to skip
@@ -93,6 +94,10 @@ __global__ void _normalize_clip_map_kernel(
     }
     if (inv_median != nullptr)
         v *= inv_median[b];
+    // The map's flat-region background is tiny negative noise; a fractional
+    // power of it is NaN, so the floor is what makes the exponent usable.
+    if (power != 1.0f)
+        v = powf(fmaxf(v, 0.0f), power);
     data[idx] = v;
 }
 
@@ -100,13 +105,15 @@ __global__ void _normalize_clip_map_kernel(
 void normalize_clip_map_inplace_tensor(
     TorchTensorView data,  // [B, ...], rows normalized independently
     bool normalize_median,
-    float clip_quantile
+    float clip_quantile,
+    float power
 ) {
-    // Quantiles are scale-equivariant, so clipping against the un-normalized
-    // cutoff and rescaling after is the documented normalize-then-clip result
-    // in one pass over the data.
+    // Quantiles are scale-equivariant and x -> x^p is monotone, so clipping
+    // against the un-normalized cutoff and rescaling and powering after is
+    // the normalize-then-clip-then-power result in one pass.
     const bool do_clip = (clip_quantile > 0.0f && clip_quantile < 1.0f);
-    if (!normalize_median && !do_clip)
+    const bool do_power = (power != 1.0f);
+    if (!normalize_median && !do_clip && !do_power)
         return;
     float* ptr = (float*)std::get<0>(data);
     if (ptr == nullptr)
@@ -136,7 +143,7 @@ void normalize_clip_map_inplace_tensor(
             /*abs_input=*/false, clip);
 
     _normalize_clip_map_kernel<<<_LAUNCH_ARGS_1D(total, 256)>>>(
-        total, N, ptr,
+        total, N, power, ptr,
         normalize_median ? inv_median : nullptr,
         do_clip ? clip : nullptr
     );

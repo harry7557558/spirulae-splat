@@ -211,6 +211,10 @@ void relocate_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
+    // Sampling weights, [N, 2] with the score in lane 0; empty falls back to
+    // densify_accum_buffer. Separate so a transformed score can drive the
+    // draw while the kernel still propagates the raw accumulator src -> dst.
+    DeviceVector<float2> sample_weights,
     DeviceVector<int32_t> bias_correction_steps,
     int sh_optim_bits,
     int num_sh,
@@ -262,9 +266,11 @@ void relocate_splats_with_long_axis_split_tensor(
     if (num_relocate == 0)
         return;
 
+    DeviceVector<float2> weights = sample_weights.data_ptr()
+        ? sample_weights : densify_accum_buffer;
     int32_t* src_indices = weighted_sample_without_replacement_internal(
-        cur_num_splats, (float*)densify_accum_buffer.data_ptr(),
-        densify_accum_buffer.size() * 2, mask, num_relocate, seed);
+        cur_num_splats, (float*)weights.data_ptr(),
+        weights.size() * 2, mask, num_relocate, seed);
 
     #define _DENSIFY_LAS_LAUNCH(T, bnd_ptr, bps) \
             relocate_with_long_axis_split_kernel<T><<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>( \
@@ -304,6 +310,10 @@ void add_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
+    // Sampling weights, [N, 2] with the score in lane 0; empty falls back to
+    // densify_accum_buffer. Separate so a transformed score can drive the
+    // draw while the kernel still propagates the raw accumulator src -> dst.
+    DeviceVector<float2> sample_weights,
     DeviceVector<int32_t> bias_correction_steps,
     int sh_optim_bits,
     int num_sh,
@@ -321,9 +331,11 @@ void add_splats_with_long_axis_split_tensor(
         return;
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
 
+    DeviceVector<float2> weights = sample_weights.data_ptr()
+        ? sample_weights : densify_accum_buffer;
     int32_t* split_indices = weighted_sample_without_replacement_internal(
-        cur_num_splats, (float*)densify_accum_buffer.data_ptr(),
-        densify_accum_buffer.size() * 2, nullptr, num_new_splats, seed);
+        cur_num_splats, (float*)weights.data_ptr(),
+        weights.size() * 2, nullptr, num_new_splats, seed);
 
     #define _DENSIFY_LAS_ADD_LAUNCH(T, bnd_ptr, bps) \
         relocate_with_long_axis_split_kernel<T><<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>( \

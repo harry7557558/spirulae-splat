@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <random>
 #include <vector>
 
@@ -297,15 +298,18 @@ int main(int argc, char** argv) {
         auto dv_f2 = [&](float* p, int64_t n) {
             return DeviceVector<float2>(ttv(p, {n, 2}));
         };
-        // (score_mode, use opacs, use w2): Mean, Max, Geom fully compared.
-        const int dcases[3][3] = {{0, 0, 0}, {1, 1, 0}, {3, 1, 1}};
+        // (score_mode, use opacs, use w2, score_power x10): Mean, Max, Geom
+        // fully compared.
+        const int dcases[4][4] = {
+            {0, 0, 0, 10}, {1, 1, 0, 10}, {3, 1, 1, 10}, {0, 0, 0, 5}};
         for (auto& c : dcases) {
             float* d_accum = upload(accum);
             densify_update_weight(
                 N, dv_f(d_radii, N), nullptr, c[1] ? d_opacs : nullptr,
                 dv_f(d_w1, N),
                 c[2] ? dv_f(d_w2, N) : DeviceVector<float>{},
-                c[2] ? 0.3f : 0.f, dv_f2(d_accum, N), c[0]);
+                c[2] ? 0.3f : 0.f, 0.1f * (float)c[3], dv_f2(d_accum, N),
+                c[0]);
             backend::device_synchronize();
             readback_f(acc, d_accum, N * 2);
         }
@@ -314,13 +318,35 @@ int main(int argc, char** argv) {
             float* d_accum = upload(accum);
             densify_update_weight(N, dv_f(d_radii, N), nullptr, d_opacs,
                                   dv_f(d_w1, N), DeviceVector<float>{}, 0.f,
-                                  dv_f2(d_accum, N), 2);
+                                  1.0f, dv_f2(d_accum, N), 2);
             backend::device_synchronize();
             std::vector<float> got(N * 2);
             backend::memcpy_sync(got.data(), d_accum, N * 2 * 4,
                                  MemcpyKind::DeviceToHost);
             for (int64_t i = 0; i < N; i++) got[2 * i] = 0.f;
             acc.insert(acc.end(), got.begin(), got.end());
+        }
+
+        // ---- densify_clip_score ----
+        // (quantile, power): quantile 1 must still run the power pass, and a
+        // non-null score_out must leave the accumulator's own .x un-powered.
+        std::vector<float> score(N * 2);
+        for (int64_t i = 0; i < N; i++) {
+            score[2 * i] = uf(0.f, 5.f);
+            score[2 * i + 1] = (float)(int)uf(0.f, 4.f);
+        }
+        score[6] = -1e-9f;
+        score[8] = std::numeric_limits<float>::quiet_NaN();
+        const float ccases[4][2] = {
+            {0.95f, 1.0f}, {1.0f, 0.5f}, {0.95f, 2.0f}, {1.0f, 1.0f}};
+        for (auto& c : ccases) {
+            float* d_score = upload(score);
+            float* d_out = upload(std::vector<float>(N * 2, 0.f));
+            densify_clip_score_tensor(N, dv_f2(d_score, N), c[0], c[1],
+                                      dv_f2(d_out, N));
+            backend::device_synchronize();
+            readback_f(acc, d_score, N * 2);
+            readback_f(acc, d_out, N * 2);
         }
     }
 
