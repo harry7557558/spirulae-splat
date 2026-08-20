@@ -119,6 +119,7 @@ struct SfmConfig {
 
     // Stage switches that are not a field of any stage's options.
     bool verify = true;                 // match: geometric verification
+    bool compact_unused_features = false;  // map: compact stored-match feature rows
     bool final_principal_point = true;  // one PP-free global BA at the end (D51)
     // Write the finished model in an upright, centred, unit-sized frame rather
     // than in whatever gauge the seed pair left it in (map/Orient.h).
@@ -298,6 +299,8 @@ struct SfmConfig {
     F(prefilter.ratio, "prefilter-ratio", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, 1,  \
       "", prefilter_ratio)                                                                         \
     /* ---- mapper ---- */                                                                         \
+    F(compact_unused_features, "compact-unused-features", CMD_MAP, Tier::Advanced, "mapper", 0,   \
+      0, "", compact_unused_features)                                                              \
     F(mapper.focal_trials, "focal-trials", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 1000,  \
       "", focal_trials)                                                                            \
     F(mapper.refine_principal_point, "refine-principal-point", CMD_AUTO | CMD_MAP, Tier::Advanced, \
