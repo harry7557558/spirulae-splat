@@ -470,6 +470,16 @@ static void adoptExrColorSpace(SfmConfig& cfg, const std::string& imagedir,
     }
 }
 
+static void reportFeatureCompaction(const FeatureCompactionStats& stats) {
+    const double removed_pct =
+        stats.original_features ? 100.0 * stats.removedFeatures() / stats.original_features : 0.0;
+    L::out(Tag::Map, M::map_feature_compaction,
+           {(long long)stats.original_features, (long long)stats.compact_features,
+            (long long)stats.removedFeatures(), L::num(removed_pct, 2), (long long)stats.images,
+            (long long)stats.zero_feature_images, (long long)stats.pairs,
+            (long long)stats.correspondences});
+}
+
 // Point colours are sampled from images the loader converted to sRGB, which is
 // where "srgb" leaves them. "image" puts them back in the photographs' space,
 // for a trainer run with convert_initial_point_cloud_color off.
@@ -1585,17 +1595,7 @@ static int cmdMap(int argc, char** argv) {
         const FeatureCompactionStats stats = compaction->stats;
         // old_to_new is the only temporary proportional to the original row count.
         compaction.reset();
-        if (opt.verbose) {
-            const double removed_pct = stats.original_features
-                                           ? 100.0 * stats.removedFeatures() /
-                                                 stats.original_features
-                                           : 0.0;
-            L::out(Tag::Map, M::map_feature_compaction,
-                   {(long long)stats.original_features, (long long)stats.compact_features,
-                    (long long)stats.removedFeatures(), L::num(removed_pct, 2),
-                    (long long)stats.images, (long long)stats.zero_feature_images,
-                    (long long)stats.pairs, (long long)stats.correspondences});
-        }
+        if (opt.verbose) reportFeatureCompaction(stats);
     }
 
     // The camera setup, in order of authority: what the command line asked for,
@@ -1647,6 +1647,22 @@ static int cmdMap(int argc, char** argv) {
         // must come from this database (image ids are positions in it); adopt()
         // checks the names and says so if they do not.
         if (!readModels(cfg.resume, models, opt.verbose)) return 1;
+        // point2D_idx indexes this run's feature arrays. A model written with a
+        // different --compact-unused-features would index other keypoints, and
+        // the mapper can only drop those observations, not recover them.
+        for (const Reconstruction& m : models)
+            for (const auto& kv : m.images) {
+                if (!kv.second.registered || kv.first >= feats.size()) continue;
+                if (kv.second.points2D.size() == feats[kv.first].count()) continue;
+                L::err_raw(Tag::Map,
+                           "resumed model image '" + kv.second.name + "' holds " +
+                               std::to_string(kv.second.points2D.size()) +
+                               " keypoints but this run's features have " +
+                               std::to_string(feats[kv.first].count()) +
+                               "; --compact-unused-features must match the run that wrote " +
+                               cfg.resume);
+                return 1;
+            }
         L::out(Tag::Map, M::map_resumed,
                {(long long)models.size(),
                 (long long)distinctRegistered(models),
@@ -2019,6 +2035,16 @@ static int cmdAuto(int argc, char** argv) {
     // whole of mapping for nothing.
     for (FeatureSet& fs : feats) {
         std::vector<uint8_t>().swap(fs.descriptors);
+    }
+    // After writeMatches, never before: the file on disk indexes the feature
+    // files, which keep every row.
+    if (cfg.compact_unused_features) {
+        FeatureCompactionPlan plan = buildFeatureCompactionPlan(db);
+        for (size_t i = 0; i < feats.size(); i++)
+            feats[i] = compactFeatureSet(std::move(feats[i]), plan.old_to_new[i],
+                                         plan.compact_counts[i]);
+        remapMatches(db, plan, feats);
+        if (verbose) reportFeatureCompaction(plan.stats);
     }
 
     // ---- 3. incremental mapping ----

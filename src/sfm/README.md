@@ -266,15 +266,18 @@ Environment: `SS_SFM_MAP_PROF=1` prints a mapper stage breakdown,
 `SS_SFM_DUMP_SG` / `SS_SFM_CMP_STEP` are BA solver debug hooks
 (`ba/README.md`).
 
-`map --compact-unused-features` is an opt-in in-memory representation change.
-It retains the feature rows referenced by stored match records in stable order,
-remaps every stored match endpoint, and releases the temporary index map before
-constructing `Mapper`. Image and pair order, pair configuration, camera setup,
-match order, and referenced keypoint, color, and descriptor rows are preserved.
-Feature and match files on disk are not rewritten. For a normally verified
+`--compact-unused-features` is an opt-in in-memory representation change, on
+`auto` and `map`. It retains the feature rows referenced by stored match records
+in stable order, remaps every stored match endpoint, and releases the temporary
+index map before constructing `Mapper`. Image and pair order, pair
+configuration, camera setup, match order, and referenced keypoint, color, and
+descriptor rows are preserved. Feature and match files on disk are not
+rewritten -- on `auto` the pass runs after `matches.bin` is written, which is
+what keeps that file indexing the feature files. For a normally verified
 `matches.bin`, the stored records are the verified correspondences; raw records
-with configuration zero are preserved as well. The option is map-only and
-defaults off.
+with configuration zero are preserved as well. A model written under the flag
+indexes the compacted features, so `--resume` and `--audit` refuse a model whose
+keypoint counts disagree with the current run. Defaults off.
 
 ## Options
 

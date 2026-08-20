@@ -1572,7 +1572,11 @@ private:
     // are then facts, not guesses), and its points re-added as fresh tracks.
     // Images the model does not hold keep the cleared state resetModel() left.
     void adopt(const Reconstruction& m) {
-        size_t cam_mismatch = 0, missing = 0, name_mismatch = 0;
+        size_t cam_mismatch = 0, missing = 0, name_mismatch = 0, count_mismatch = 0;
+        // point2D_idx is an index into this run's feature arrays, so a model
+        // whose image holds a different number of keypoints indexes different
+        // features -- what --compact-unused-features does on one side only.
+        std::set<uint32_t> reindexed;
         for (const auto& kv : m.cameras) {
             rec_.cameras[kv.first] = kv.second;
             // cameras.bin cannot carry pixel_scale (it says nothing about the
@@ -1598,6 +1602,10 @@ private:
                     (kv.second.name.size() > want.size() && kv.second.name[want.size()] != '.'))
                     name_mismatch++;
             }
+            if (kv.second.points2D.size() != it->second.points2D.size()) {
+                count_mismatch++;
+                reindexed.insert(kv.first);
+            }
             it->second.pose = kv.second.pose;
             it->second.registered = true;
         }
@@ -1608,6 +1616,7 @@ private:
             for (const TrackElement& e : kv.second.track) {
                 auto it = rec_.images.find(e.image_id);
                 if (it == rec_.images.end() || !it->second.registered) continue;
+                if (reindexed.count(e.image_id)) continue;
                 if (e.point2D_idx >= it->second.point3D_ids.size()) continue;
                 if (it->second.point3D_ids[e.point2D_idx] != kInvalidPoint3D) continue;
                 tr.push_back(e);
@@ -1624,6 +1633,13 @@ private:
                     "[map] WARNING: %zu adopted image(s) have a different name than the database "
                     "entry with the same id -- the model was probably built from other matches, "
                     "and adopting it will produce nonsense\n", name_mismatch);
+        if (count_mismatch)
+            fprintf(stderr,
+                    "[map] WARNING: %zu adopted image(s) hold a different keypoint count than "
+                    "this run's features -- their observations index other keypoints and were "
+                    "dropped, poses kept. Feature compaction on one side only does this; "
+                    "--compact-unused-features has to match the run that wrote the model\n",
+                    count_mismatch);
         if ((missing || cam_mismatch) && opt_.verbose)
             fprintf(stderr,
                     "[map] adopted model: %zu image(s) not in this database, %zu with a "

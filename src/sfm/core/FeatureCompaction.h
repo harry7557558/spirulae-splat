@@ -76,11 +76,6 @@ inline bool sameCameraExact(const Camera& a, const Camera& b) {
            a.sy1 == b.sy1 && a.pixel_scale == b.pixel_scale;
 }
 
-inline bool sameKeypointExact(const Keypoint& a, const Keypoint& b) {
-    return a.x == b.x && a.y == b.y && a.scale == b.scale &&
-           a.orientation == b.orientation && a.response == b.response;
-}
-
 inline FeatureCompactionPlan buildFeatureCompactionPlan(const MatchesDatabase& db) {
     FeatureCompactionPlan plan;
     plan.stats.images = db.images.size();
@@ -97,9 +92,10 @@ inline FeatureCompactionPlan buildFeatureCompactionPlan(const MatchesDatabase& d
     plan.pair_config.reserve(db.pairs.size());
     plan.pair_match_counts.reserve(db.pairs.size());
 
-    for (const ImageEntry& image : db.images) {
+    for (size_t i = 0; i < db.images.size(); i++) {
+        const ImageEntry& image = db.images[i];
         plan.stats.original_features += image.num_features;
-        plan.old_to_new[plan.image_names.size()].assign(image.num_features, kUnusedFeature);
+        plan.old_to_new[i].assign(image.num_features, kUnusedFeature);
         plan.image_names.push_back(image.name);
         plan.image_feature_counts.push_back(image.num_features);
     }
@@ -212,28 +208,10 @@ inline FeatureSet compactFeatureSet(FeatureSet input,
             out.descriptors.insert(out.descriptors.end(),
                                    input.descriptors.begin() + old * descriptor_row,
                                    input.descriptors.begin() + (old + 1) * descriptor_row);
-
-        const StoredFeatureIndex now = old_to_new[old];
-        if (!sameKeypointExact(input.keypoints[old], out.keypoints[now]))
-            throw compactionError("keypoint data changed while compacting");
-        if (have_colors)
-            for (size_t c = 0; c < 3; c++)
-                if (input.colors[old * 3 + c] != out.colors[size_t(now) * 3 + c])
-                    throw compactionError("feature color changed while compacting");
-        if (have_descriptors)
-            for (size_t d = 0; d < descriptor_row; d++)
-                if (input.descriptors[old * descriptor_row + d] !=
-                    out.descriptors[size_t(now) * descriptor_row + d])
-                    throw compactionError("descriptor row changed while compacting");
     }
 
     if (out.count() != compact_count)
         throw compactionError("compacted FeatureSet has the wrong feature count");
-    if (out.width != input.width || out.height != input.height ||
-        out.extract_width != input.extract_width || out.extract_height != input.extract_height ||
-        out.exif_focal != input.exif_focal || out.exif_camera != input.exif_camera ||
-        out.dim != input.dim || out.dtype != input.dtype)
-        throw compactionError("feature-set metadata changed while compacting");
     return out;
 }
 
