@@ -30,7 +30,8 @@ enum class RawLossIndex {
     RenderNormalMaskTotal,
     DepthNormalMaskTotal,
     NormalRegMaskTotal,
-    AlphaMaskTotal,
+    AlphaOverTotal,
+    AlphaUnderTotal,
     // median-depth mask totals
     MeanMedianDepthMaskTotal,
     MedianDepthNormalMaskTotal,

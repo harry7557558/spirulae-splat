@@ -748,14 +748,13 @@ the engine level.
     even the RobustEdgeAware densification map compares tight.
   - `quantile.slang`: 4-pass radix select over float bit images; all
     integer histograms/atomics -> bit-exact across backends and devices.
-  - Two CUDA-reference quirks surfaced (both display-only, documented in
+  - One CUDA-reference quirk survives (display-only, documented in
     msloss_parity.cpp): the SSIM scalar sums over TILE-GRID positions, so
     non-multiple-of-tile images pick up zero-padded out-of-image
-    contributions that differ 24-vs-16; and Common.cuh's
-    `blockAtomicAdd<576>` reduces its 18 warp partials with power-of-two
-    shuffle strides, silently dropping warps 8 and 17 (~4% low on the
-    CUDA side; the Vulkan value matches a numpy brute force of the same
-    center set exactly). Gradients and loss values are unaffected.
+    contributions that differ 24-vs-16. Gradients and loss values are
+    unaffected. The other one -- `blockAtomicAdd<576>` dropping warps 8
+    and 17 of 18 to a 9/4/2/1 fold -- is fixed in Common.cuh
+    (`warpFoldStride`), and the two backends' scalars now agree.
   - Parity: `msloss_parity` (432K tight + 22K loose; 6 configs covering
     all 7 loss-map modes, equal-shape + scaled GT modalities, masks at
     equal/different resolutions, camera_indices, 1-3 pyramid scales, plus

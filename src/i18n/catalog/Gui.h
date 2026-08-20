@@ -1144,64 +1144,81 @@ SS_MSG(opt_mask_mode_cut_out,
     NL("Achtergrond uitsnijden"), RU("Вырезать фон"),
     TR("Arka planı ayır"));
 
+SS_MSG(opt_mask_mode_off,
+    EN("Don't use masks"),
+    JA("マスクを使わない"), ZH_HANS("不使用蒙版"), ZH_HANT("不使用遮罩"),
+    KO("마스크 사용 안 함"), DE("Masken nicht verwenden"),
+    FR("Ne pas utiliser de masques"), ES("No usar máscaras"),
+    PT("Não usar máscaras"), IT("Non usare le maschere"),
+    NL("Maskers niet gebruiken"), RU("Не использовать маски"),
+    TR("Maskeleri kullanma"));
+
 SS_MSG(opt_mask_mode_help,
     EN("What a mask means, where one is used. Ignore distractors: masked-out "
        "pixels are left out of the loss -- for people, cars, the "
        "photographer's shadow, or the area outside a fisheye circle. Cut out "
        "background: masked-out pixels are trained as empty, so the background "
        "is cut away and only the masked subject is reconstructed -- for "
-       "object captures. Has no effect on a dataset without masks."),
+       "object captures. Don't use masks: the mask folder is not read at "
+       "all. Has no effect on a dataset without masks."),
     JA("マスクがある場合の意味です。「邪魔物を無視」ではマスクされた画素を"
        "損失から外します。通行人、車、撮影者の影、魚眼の円外といったものに"
        "向きます。「背景を切り抜く」ではマスクされた画素を空として学習するので、"
        "背景が取り除かれ、マスクされた被写体だけが再構成されます。物体の撮影"
-       "向けです。マスクのないデータセットでは効果はありません。"),
+       "向けです。「マスクを使わない」ではマスクを一切読み込みません。"
+       "マスクのないデータセットでは効果はありません。"),
     ZH_HANS("有蒙版时蒙版的含义。“忽略干扰物”：被遮住的像素不计入损失——用于"
             "行人、汽车、摄影者的影子、鱼眼圆之外的区域。“裁掉背景”：被遮住的"
             "像素按空白训练，于是背景被裁掉，只重建被蒙版选中的主体——用于物体"
-            "拍摄。数据集没有蒙版时不起作用。"),
+            "拍摄。“不使用蒙版”：完全不读取蒙版。数据集没有蒙版时不起作用。"),
     ZH_HANT("有遮罩時遮罩的含意。「忽略干擾物」：被遮住的像素不計入損失——用於"
             "行人、汽車、攝影者的影子、魚眼圓之外的區域。「裁掉背景」：被遮住的"
             "像素按空白訓練，於是背景被裁掉，只重建被遮罩選中的主體——用於物體"
-            "拍攝。資料集沒有遮罩時不起作用。"),
+            "拍攝。「不使用遮罩」：完全不讀取遮罩。資料集沒有遮罩時不起作用。"),
     KO("마스크가 있을 때 마스크의 의미입니다. 방해물 무시: 가려진 픽셀을 "
        "손실에서 뺍니다 — 지나가는 사람, 차, 촬영자의 그림자, 어안 원 바깥에 "
        "씁니다. 배경 잘라내기: 가려진 픽셀을 빈 곳으로 학습해 배경을 잘라내고 "
-       "마스크된 피사체만 재구성합니다 — 물체 촬영용입니다. 마스크가 없는 "
-       "데이터셋에서는 아무 효과가 없습니다."),
+       "마스크된 피사체만 재구성합니다 — 물체 촬영용입니다. 마스크 사용 안 "
+       "함: 마스크를 전혀 읽지 않습니다. 마스크가 없는 데이터셋에서는 아무 "
+       "효과가 없습니다."),
     DE("Was eine Maske bedeutet, wo eine vorliegt. Störendes ignorieren: "
        "maskierte Pixel bleiben aus der Verlustfunktion heraus -- für "
        "Passanten, Autos, den eigenen Schatten oder den Bereich außerhalb des "
        "Fischaugenkreises. Hintergrund freistellen: maskierte Pixel werden als "
        "leer trainiert, der Hintergrund fällt weg und nur das maskierte Motiv "
-       "wird rekonstruiert -- für Objektaufnahmen. Ohne Masken im Datensatz "
+       "wird rekonstruiert -- für Objektaufnahmen. Masken nicht verwenden: "
+       "die Masken werden gar nicht erst gelesen. Ohne Masken im Datensatz "
        "ohne Wirkung."),
     FR("Ce que signifie un masque, là où il y en a un. Ignorer les gêneurs : "
        "les pixels masqués sont retirés de la fonction de coût -- pour les "
        "passants, les voitures, votre propre ombre ou la zone hors du cercle "
        "fisheye. Détourer l'arrière-plan : les pixels masqués sont entraînés "
        "comme vides, l'arrière-plan disparaît et seul le sujet masqué est "
-       "reconstruit -- pour les prises d'objet. Sans effet sur un jeu de "
+       "reconstruit -- pour les prises d'objet. Ne pas utiliser de masques : "
+       "les masques ne sont pas lus du tout. Sans effet sur un jeu de "
        "données sans masques."),
     ES("Qué significa una máscara, donde la hay. Ignorar los elementos "
        "molestos: los píxeles enmascarados quedan fuera de la función de "
        "pérdida -- para transeúntes, coches, la sombra del fotógrafo o la "
        "zona fuera del círculo de ojo de pez. Recortar el fondo: los píxeles "
        "enmascarados se entrenan como vacíos, el fondo se elimina y solo se "
-       "reconstruye el sujeto enmascarado -- para capturas de objetos. Sin "
-       "efecto en un conjunto sin máscaras."),
+       "reconstruye el sujeto enmascarado -- para capturas de objetos. No "
+       "usar máscaras: las máscaras no se leen en absoluto. Sin efecto en un "
+       "conjunto sin máscaras."),
     PT("O que uma máscara significa, onde houver uma. Ignorar o que atrapalha: "
        "os pixels mascarados ficam de fora da função de perda -- para pessoas "
        "passando, carros, a sombra do fotógrafo ou a área fora do círculo olho "
        "de peixe. Recortar o fundo: os pixels mascarados são treinados como "
        "vazios, o fundo é removido e só o sujeito mascarado é reconstruído -- "
-       "para capturas de objetos. Sem efeito num conjunto sem máscaras."),
+       "para capturas de objetos. Não usar máscaras: as máscaras não são "
+       "lidas de todo. Sem efeito num conjunto sem máscaras."),
     IT("Che cosa significa una maschera, dove ce n'è una. Ignorare i "
        "disturbi: i pixel mascherati restano fuori dalla funzione di perdita "
        "-- per passanti, automobili, l'ombra del fotografo o l'area fuori dal "
        "cerchio fisheye. Ritagliare lo sfondo: i pixel mascherati vengono "
        "addestrati come vuoti, lo sfondo sparisce e si ricostruisce solo il "
-       "soggetto mascherato -- per le riprese di oggetti. Senza effetto su un "
+       "soggetto mascherato -- per le riprese di oggetti. Non usare le "
+       "maschere: le maschere non vengono lette affatto. Senza effetto su un "
        "set di dati senza maschere."),
     NL("Wat een masker betekent, waar er een is. Storende dingen negeren: "
        "gemaskeerde pixels tellen niet mee in het verlies -- voor "
@@ -1209,19 +1226,22 @@ SS_MSG(opt_mask_mode_help,
        "buiten de fisheye-cirkel. Achtergrond uitsnijden: gemaskeerde pixels "
        "worden als leeg getraind, de achtergrond valt weg en alleen het "
        "gemaskeerde onderwerp wordt gereconstrueerd -- voor opnamen van een "
-       "object. Zonder maskers in de dataset zonder effect."),
+       "object. Maskers niet gebruiken: de maskers worden helemaal niet "
+       "gelezen. Zonder maskers in de dataset zonder effect."),
     RU("Что означает маска там, где она есть. Игнорировать помехи: закрытые "
        "маской пиксели не входят в функцию потерь -- для прохожих, машин, "
        "тени фотографа или области вне круга «рыбьего глаза». Вырезать фон: "
        "закрытые маской пиксели обучаются как пустота, фон удаляется и "
        "восстанавливается только объект под маской -- для съёмки предметов. "
-       "Без масок в наборе ни на что не влияет."),
+       "Не использовать маски: маски вообще не читаются. Без масок в наборе "
+       "ни на что не влияет."),
     TR("Maske varsa maskenin ne anlama geldiği. Rahatsız edicileri yok say: "
        "maskelenen pikseller yitim işlevine girmez -- yoldan geçenler, "
        "arabalar, fotoğrafçının gölgesi ya da balıkgözü dairesinin dışı için. "
        "Arka planı ayır: maskelenen pikseller boş olarak eğitilir, arka plan "
        "kalkar ve yalnızca maskelenen konu yeniden oluşturulur -- nesne "
-       "çekimleri için. Maskesiz bir veri kümesinde etkisi yoktur."));
+       "çekimleri için. Maskeleri kullanma: maskeler hiç okunmaz. Maskesiz "
+       "bir veri kümesinde etkisi yoktur."));
 
 SS_MSG(opt_sh_degree,
     EN("Color detail (SH)"),

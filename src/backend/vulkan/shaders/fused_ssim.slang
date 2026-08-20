@@ -60,14 +60,29 @@ float _fs_pix(float* img, int b, int y, int x, int ci, int H, int W) {
     return img[(((b * H) + y) * W + x) * 3 + ci];
 }
 
+// Nearest-sample the mask at ITS resolution, as core/Interpolation.cuh's
+// nearest_sample_b does: a mask is stored at the file's size, which is not the
+// render's whenever the run is downscaled.
+[ForceInline]
+bool _fs_mask_at(uint* masks, int Bm, int Hm, int Wm, int H, int W,
+                 int b, int y, int x) {
+    if (uint(b) >= uint(Bm)) return true;
+    if (uint(x) >= uint(W) || uint(y) >= uint(H)) return true;
+    int xs = x, ys = y;
+    if (Wm != W || Hm != H) {
+        float u = (float(x) + 0.5f) * float(Wm) / float(W) - 0.5f;
+        float v = (float(y) + 0.5f) * float(Hm) / float(H) - 0.5f;
+        xs = max(0, min(Wm - 1, int(floor(u + 0.5f))));
+        ys = max(0, min(Hm - 1, int(floor(v + 0.5f))));
+    }
+    uint idx = (uint(b) * uint(Hm) + uint(ys)) * uint(Wm) + uint(xs);
+    return u8_load(masks, idx) != 0u;
+}
+
 [ForceInline]
 bool _fs_mask(SsimParams p, int b, int y, int x) {
     if ((p.flags & kSsimHasMask) == 0) return true;
-    if (uint(b) >= uint(p.Bm) || uint(x) >= uint(p.Wm) ||
-        uint(y) >= uint(p.Hm))
-        return true;
-    uint idx = (uint(b) * uint(p.Hm) + uint(y)) * uint(p.Wm) + uint(x);
-    return u8_load(p.masks, idx) != 0u;
+    return _fs_mask_at(p.masks, p.Bm, p.Hm, p.Wm, p.H, p.W, b, y, x);
 }
 
 
@@ -86,10 +101,8 @@ struct SsimCovParams {
 
 [ForceInline]
 float _fs_cov_mask(SsimCovParams p, int b, int y, int x) {
-    if (uint(b) >= uint(p.Bm) || uint(x) >= uint(p.Wm) || uint(y) >= uint(p.Hm))
-        return 1.0f;
-    uint idx = (uint(b) * uint(p.Hm) + uint(y)) * uint(p.Wm) + uint(x);
-    return u8_load(p.masks, idx) != 0u ? 1.0f : 0.0f;
+    return _fs_mask_at(p.masks, p.Bm, p.Hm, p.Wm, p.H, p.W, b, y, x) ? 1.0f
+                                                                     : 0.0f;
 }
 
 [shader("compute")]
@@ -302,9 +315,13 @@ void ssim_bwd_inplace(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
             int dpix_y = startY + ly - HALO;
             int dpix_x = startX + lx;
+            // A window centred on a masked pixel scores the constant 1 in
+            // the scalar above, so it must push no gradient onto the unmasked
+            // neighbours it overlaps -- its moments are a divide by ~nothing.
             float masked_grad =
                 grad * float(dpix_x >= HALO && dpix_y >= HALO &&
-                             dpix_x < p.W + HALO && dpix_y < p.H + HALO);
+                             dpix_x < p.W + HALO && dpix_y < p.H + HALO &&
+                             _fs_mask(p, bIdx, dpix_y - HALO, dpix_x - HALO));
 
             sData(0, ly - HALO, lx) = d_m_dmu1 * masked_grad * inv_cov;
             sData(1, ly - HALO, lx) = d_m_dsigma1_sq * masked_grad * inv_cov;

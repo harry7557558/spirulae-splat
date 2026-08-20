@@ -6,32 +6,8 @@
 //   CUDA build:   ./msloss_parity dump ref.bin
 //   Vulkan build: ./msloss_parity compare ref.bin   (per device)
 //
-// Ref format: [nf tight floats] [nl loose floats].
-//
-// Channel assignment:
-//  - tight: per-pixel gradients (deterministic given the raw-loss sums; the
-//    sums enter grads only through smooth reduce math, so cross-backend
-//    rounding stays ~1e-5 relative), the densification loss map in every
-//    mode (per-pixel L1/aux + SSIM map, canny, robust-canny -- the quantile
-//    selector is bit-exact integer radix-select), equal-shape v_ref_depth /
-//    v_ref_normal (single-tap scatter -> one atomic per cell), and the
-//    quantile outputs.
-//  - loose: LossValues (atomic raw-loss accumulation with different block
-//    geometries), the SSIM display scalar, and scaled-GT v_ref_depth /
-//    v_ref_normal (multi-tap atomic scatter).
-//
-// Known EXPECTED mismatches (display-only SSIM scalar; stay within the loose
-// failure budget): (a) CUDA sums ssim over tile-grid positions, so images
-// whose dims aren't multiples of the tile pick up zero-padded out-of-image
-// contributions that differ between 24- and 16-wide tiles ("ssim_cs" cfg);
-// (b) CUDA's blockAtomicAdd<576> reduces its 18 warp partials with
-// power-of-two shuffle strides (9/4/2/1), silently dropping warps 8 and 17
-// -- the Vulkan 256-tree value matches a numpy brute-force of the same
-// center set exactly, the CUDA value is ~4% low ("scaled_gt" cfg).
-//
-// LossValues / the SSIM scalar are read through one-iteration-behind async
-// readouts on both backends, so every config runs the identical computation
-// twice and compares the second return value.
+// Ref format: [nf tight floats] [nl loose floats]. Which values go in which
+// channel, and the one expected CUDA/Vulkan mismatch: docs/testing.md.
 
 #include <kernels/loss/PerPixelLoss.cuh>
 #include <kernels/densify/Densify.cuh>

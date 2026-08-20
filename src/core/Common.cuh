@@ -624,6 +624,15 @@ inline __device__ void warpAtomicAdd(float2* addr, float2 &val) {
 // block reduce / atomic
 ///////////////////////////////
 
+// First stride of the cross-warp fold, which must be a power of two: with 18
+// warps, strides 9/4/2/1 never fold lanes 8 and 17 into lane 0 and the
+// fused-SSIM scalar read ~11% low. Lanes past the warp count hold 0.
+constexpr int warpFoldStride(int num_warps) {
+    int s = 1;
+    while (s < num_warps) s <<= 1;
+    return s >> 1;
+}
+
 template<int BLOCK_SIZE>
 inline __device__ void blockAtomicAdd(float* addr, float val) {
     static_assert(BLOCK_SIZE > WARP_SIZE && BLOCK_SIZE <= WARP_SIZE * WARP_SIZE);
@@ -647,7 +656,8 @@ inline __device__ void blockAtomicAdd(float* addr, float val) {
         val = laneId < BLOCK_SIZE / WARP_SIZE ?
             sharedSums[laneId] : 0.0f;
         #pragma unroll
-        for (int stride = (BLOCK_SIZE / WARP_SIZE) >> 1; stride > 0; stride >>= 1)
+        for (int stride = warpFoldStride(BLOCK_SIZE / WARP_SIZE);
+             stride > 0; stride >>= 1)
             val += __shfl_down_sync(0xFFFFFFFF, val, stride);
         if (laneId == 0 && val != 0.0f)
             atomicAdd(addr, val);
@@ -685,7 +695,7 @@ inline __device__ void blockAtomicAdd(float4* addr, float4 val) {
         float val = laneId < NUM_WARPS ?
             sharedSums[laneId + warpId * NUM_WARPS] : 0.0f;
         #pragma unroll
-        for (int stride = NUM_WARPS >> 1; stride > 0; stride >>= 1)
+        for (int stride = warpFoldStride(NUM_WARPS); stride > 0; stride >>= 1)
             val += __shfl_down_sync(0xFFFFFFFF, val, stride);
         if (laneId == 0 && val != 0.0f)
             atomicAdd((float*)addr + warpId, val);
@@ -721,7 +731,7 @@ inline __device__ void blockAtomicAdd(float3* addr, float3 val) {
         float val = laneId < NUM_WARPS ?
             sharedSums[laneId + warpId * NUM_WARPS] : 0.0f;
         #pragma unroll
-        for (int stride = NUM_WARPS >> 1; stride > 0; stride >>= 1)
+        for (int stride = warpFoldStride(NUM_WARPS); stride > 0; stride >>= 1)
             val += __shfl_down_sync(0xFFFFFFFF, val, stride);
         if (laneId == 0 && val != 0.0f)
             atomicAdd((float*)addr + warpId, val);
@@ -755,7 +765,7 @@ inline __device__ void blockAtomicAdd(float2* addr, float2 val) {
         float val = laneId < NUM_WARPS ?
             sharedSums[laneId + warpId * NUM_WARPS] : 0.0f;
         #pragma unroll
-        for (int stride = NUM_WARPS >> 1; stride > 0; stride >>= 1)
+        for (int stride = warpFoldStride(NUM_WARPS); stride > 0; stride >>= 1)
             val += __shfl_down_sync(0xFFFFFFFF, val, stride);
         if (laneId == 0 && val != 0.0f)
             atomicAdd((float*)addr + warpId, val);

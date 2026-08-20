@@ -7,7 +7,9 @@ describe is gone -- see §3 for what it covered and what now does not.
 
 `src/backend/tests/*.cpp` — currently 18 tools covering projection (fwd, bwd,
 quant-grad), rasterization bwd, tile intersect, warp, FPBO, optimizer (general
-+ geometry), densify, per-pixel train, PPISP, bilagrid, multi-scale loss,
++ geometry), densify, per-pixel train, PPISP, bilagrid, multi-scale loss
+(`mask_loss_semantics` is self-checking rather than dump-then-compare: it pins
+what an image mask means in the loss, in both mask modes and with none),
 meshing (activation, LBVH, occupancy/bisection/color, moment raster, the
 per-camera samplers and the visibility cull), plus
 `backend/tests/engine/` which drives the *real* engine end to end
@@ -33,6 +35,19 @@ is dump-then-compare:
 Inputs are deterministic, and comparison is tolerance-based — fast-math
 exp/sqrt chains legitimately differ across compilers, and borderline-cull
 flips change whole rows, so a small allowance for those is built in.
+
+`msloss_parity` splits its reference into two channels. **Tight**: per-pixel
+gradients (deterministic given the raw-loss sums, which enter them only through
+smooth reduce math), the densification loss map in every mode, equal-shape
+`v_ref_depth` / `v_ref_normal` scatters (one atomic per cell), and the quantile
+outputs. **Loose**: `LossValues`, the SSIM display scalar, and scaled-GT
+scatters, which accumulate atomically in a backend-specific order. Each config
+runs twice and compares the second return, because the scalars come back
+through a one-iteration-behind async readout on both backends. One expected
+mismatch survives: the CUDA SSIM scalar sums over TILE-GRID positions, so an
+image whose dims are not a multiple of the tile picks up zero-padded
+out-of-image contributions that differ between the 24- and 16-wide tiles
+(`ssim_cs` cfg). It is display-only; gradients and loss values are unaffected.
 
 Several tools also take a `*_DUMP_GOT` environment variable
 (`FPBO_DUMP_GOT`, `PPISP_DUMP_GOT`, `MSLOSS_DUMP_GOT`, `PWTRAIN_DUMP_GOT`,

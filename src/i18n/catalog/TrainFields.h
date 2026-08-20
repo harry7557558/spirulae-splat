@@ -680,6 +680,48 @@ SS_MSG(mask_dir_help,
     TR("Görüntü maskelerini içeren alt klasör; COLMAP ve Metashape veri kümeleri "
        "için. Maskenin ne anlama geldiğini apply_loss_for_mask belirler."));
 
+SS_MSG(load_masks,
+    EN("Use dataset masks"), JA("データセットのマスクを使う"),
+    ZH_HANS("使用数据集的蒙版"), ZH_HANT("使用資料集的遮罩"),
+    KO("데이터셋의 마스크 사용"), DE("Masken des Datensatzes nutzen"),
+    FR("Utiliser les masques du jeu"),
+    ES("Usar las máscaras del conjunto"),
+    PT("Usar as máscaras do conjunto"),
+    IT("Usare le maschere del set"),
+    NL("Maskers van de dataset gebruiken"),
+    RU("Использовать маски набора"),
+    TR("Veri kümesinin maskelerini kullan"));
+SS_MSG(load_masks_help,
+    EN("Use the dataset's masks when they exist. What they then mean is set by "
+       "apply_loss_for_mask; turn off to train as if the dataset had none."),
+    JA("データセットにマスクがあれば使います。その意味は apply_loss_for_mask で"
+       "決まります。オフにするとマスクがないものとして学習します。"),
+    ZH_HANS("数据集里有蒙版时就使用它们。它们的含义由 apply_loss_for_mask 决定；"
+            "关掉就当作数据集没有蒙版来训练。"),
+    ZH_HANT("資料集裡有遮罩時就使用它們。它們的含意由 apply_loss_for_mask 決定；"
+            "關掉就當作資料集沒有遮罩來訓練。"),
+    KO("데이터셋에 마스크가 있으면 사용합니다. 그 의미는 apply_loss_for_mask가 "
+       "정하며, 끄면 마스크가 없는 데이터셋처럼 학습합니다."),
+    DE("Die Masken des Datensatzes verwenden, sofern vorhanden. Was sie bedeuten, "
+       "legt apply_loss_for_mask fest; abschalten trainiert wie ohne Masken."),
+    FR("Utiliser les masques du jeu de données lorsqu'ils existent. Ce qu'ils "
+       "signifient est fixé par apply_loss_for_mask ; décocher entraîne comme "
+       "si le jeu n'en avait pas."),
+    ES("Usar las máscaras del conjunto de datos cuando existan. Lo que significan "
+       "lo fija apply_loss_for_mask; desactive para entrenar como si no hubiera."),
+    PT("Usar as máscaras do conjunto de dados quando existirem. O que elas "
+       "significam é definido por apply_loss_for_mask; desligue para treinar "
+       "como se não houvesse nenhuma."),
+    IT("Usare le maschere del set di dati quando ci sono. Che cosa significhino "
+       "lo stabilisce apply_loss_for_mask; disattivare addestra come se non ce "
+       "ne fossero."),
+    NL("De maskers van de dataset gebruiken als die er zijn. Wat ze betekenen, "
+       "bepaalt apply_loss_for_mask; zet uit om te trainen alsof er geen zijn."),
+    RU("Использовать маски набора, если они есть. Что они означают, задаёт "
+       "apply_loss_for_mask; выключите, чтобы обучать как без масок."),
+    TR("Veri kümesinde maskeler varsa onları kullanır. Ne anlama geldiklerini "
+       "apply_loss_for_mask belirler; maskesiz eğitmek için kapatın."));
+
 SS_MSG(apply_loss_for_mask,
     EN("Train masked pixels as empty"), JA("マスク部分を空として学習"),
     ZH_HANS("把被遮住的像素当作空白训练"),

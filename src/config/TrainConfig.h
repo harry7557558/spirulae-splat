@@ -108,6 +108,7 @@ inline int train_tier_rank(const char* tier) {
     X(std::string, data_format, "", "dataset", "basic", "colmap|nerfstudio|metashape|none") \
     X(std::string, image_dir, "images", "dataset", "basic", "")              \
     X(std::string, mask_dir, "masks", "dataset", "basic", "")                \
+    X(bool, load_masks, true, "dataset", "basic", "")                        \
     X(bool, apply_loss_for_mask, false, "dataset", "basic", "")              \
     X(float, mask_boundary_offset, 0.0f, "dataset", "advanced", "")          \
     X(std::string, depth_dir, "depths", "dataset", "basic", "")              \
@@ -189,7 +190,7 @@ inline int train_tier_rank(const char* tier) {
     X(float, l2_weight_v, 0.0f, "loss", "advanced", "")                      \
     X(int, loss_scale_min_pixels, 1920, "loss", "advanced", "")              \
     X(int, num_loss_scales, 0, "loss", "advanced", "")                       \
-    X(float, alpha_loss_weight, 0.01f, "loss", "basic", "")                  \
+    X(float, alpha_loss_weight, 0.1f, "loss", "basic", "")                   \
     X(float, alpha_loss_weight_under, 0.0f, "loss", "basic", "")             \
                                                                              \
     /* ==== geometry -- how crisp the surfaces come out, and depth/normal guidance ==== */ \
@@ -329,8 +330,8 @@ struct TrainConfig {
     X(orientation_method) X(center_method) X(auto_scale_poses) \
     X(outlier_threshold) X(train_frame) X(eval_mode) X(train_split_fraction) \
     X(eval_interval) X(depth_unit_scale_factor) X(validation_fraction) \
-    X(warp_to_pinhole) X(warp_spherical_to_pinhole) X(load_depths) \
-    X(load_normals) X(relative_scale) \
+    X(warp_to_pinhole) X(warp_spherical_to_pinhole) X(load_masks) \
+    X(load_depths) X(load_normals) X(relative_scale) \
     /* end */
 
 

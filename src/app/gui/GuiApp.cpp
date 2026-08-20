@@ -4999,12 +4999,15 @@ void GuiApp::draw_basic_options() {
     ui::help_on_hover(msg::opt_resolution_help);
 
     {
-        int mi = _cfg.apply_loss_for_mask ? 1 : 0;
+        int mi = !_cfg.load_masks ? 2 : _cfg.apply_loss_for_mask ? 1 : 0;
         ImGui::SetNextItemWidth(w);
         if (ui::Combo(msg::opt_mask_mode, &mi,
                       {&msg::opt_mask_mode_exclude,
-                       &msg::opt_mask_mode_cut_out})) {
+                       &msg::opt_mask_mode_cut_out,
+                       &msg::opt_mask_mode_off})) {
+            _cfg.load_masks = mi != 2;
             _cfg.apply_loss_for_mask = mi == 1;
+            _cfg_ui.touched.insert("load_masks");
             _cfg_ui.touched.insert("apply_loss_for_mask");
         }
         ui::help_on_hover(msg::opt_mask_mode_help);

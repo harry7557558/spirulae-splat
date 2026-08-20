@@ -158,6 +158,7 @@ public:
     // Filled by load_dataset().
     ParsedDataset ds;
     PostSplitCameras post;
+    bool has_mask = false;
     bool has_depth = false;
     bool has_normal = false;
 
