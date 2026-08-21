@@ -1641,11 +1641,13 @@ SS_MSG(stop_and_save_help,
 // ---- status strip ----
 
 SS_MSG(status_step,
-    EN("step {0} / {1}"), JA("ステップ {0} / {1}"), ZH_HANS("第 {0} / {1} 步"),
-    ZH_HANT("第 {0} / {1} 步"), KO("{0} / {1} 단계"), DE("Schritt {0} / {1}"),
-    FR("étape {0} / {1}"), ES("paso {0} / {1}"), PT("passo {0} / {1}"),
-    IT("passo {0} / {1}"), NL("stap {0} / {1}"), RU("шаг {0} / {1}"),
-    TR("adım {0} / {1}"));
+    EN("step {0} / {1}  ({2}%)"), JA("ステップ {0} / {1}  ({2}%)"),
+    ZH_HANS("第 {0} / {1} 步  ({2}%)"), ZH_HANT("第 {0} / {1} 步  ({2}%)"),
+    KO("{0} / {1} 단계  ({2}%)"), DE("Schritt {0} / {1}  ({2}%)"),
+    FR("étape {0} / {1}  ({2} %)"), ES("paso {0} / {1}  ({2}%)"),
+    PT("passo {0} / {1}  ({2}%)"), IT("passo {0} / {1}  ({2}%)"),
+    NL("stap {0} / {1}  ({2}%)"), RU("шаг {0} / {1}  ({2}%)"),
+    TR("adım {0} / {1}  (%{2})"));
 
 SS_MSG(status_rate,
     EN("{0} ms/step   elapsed {1}   ETA {2}   splats: {3}"),

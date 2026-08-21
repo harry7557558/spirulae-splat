@@ -121,6 +121,9 @@ std::string train_config_unsupported(const TrainConfig& c);
 // TrainerSession
 // ===========================================================================
 
+// "m:ss", or "h:mm:ss" past an hour; negative (not known yet) is "--:--".
+std::string format_duration(double seconds);
+
 struct TrainerProgress {
     int step = 0;              // 0-based step that just finished
     int total_steps = 0;
@@ -233,6 +236,10 @@ public:
     // train() starts, frozen once it returns.
     double elapsed_seconds() const;
 
+    // Remaining wall clock over the last 100 steps' average, or -1 before
+    // the first step lands.
+    double eta_seconds() const;
+
     // The /progress response body.
     std::string progress_json();
 
@@ -248,12 +255,15 @@ private:
     void pause_clock_start();
     void pause_clock_stop();
 
+    // Seconds per step over the window, or -1 while it is empty.
+    double avg_step_latency() const;
+
     mutable std::mutex _time_mutex;                        // guards the clock
     std::chrono::steady_clock::time_point _start_time{};   // {} = not started
     std::chrono::steady_clock::time_point _end_time{};     // {} = running
     std::chrono::steady_clock::time_point _pause_start{};  // {} = not paused
     double _paused_s = 0.0;
-    std::mutex _progress_mutex;            // guards the latency window
+    mutable std::mutex _progress_mutex;    // guards the latency window
     std::deque<double> _step_latencies;    // last 100, seconds
 };
 
