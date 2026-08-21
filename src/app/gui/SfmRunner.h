@@ -104,6 +104,15 @@ struct SfmJob {
     // breaking into one model per unbroken run of frames.
     bool loop_closure = true;
     float init_focal_px = 0.0f;       // 0 = guess from EXIF / image size
+    // Starting distortion, "k1,k2,..." in the lens model's own order; empty
+    // starts at zero.
+    std::string init_distortion;
+    // When bundle adjustment fits the distortion: 0 throughout, 1 only in the
+    // finishing pass, 2 never -- hold init_distortion as a calibration.
+    int distortion_refine = 0;
+    // One more bundle adjustment at the very end with every image on its own
+    // intrinsics, whatever the camera sharing above says.
+    bool final_per_image_intrinsics = false;
     int max_features = 0;             // 0 = the quality preset's
     int max_image_size = 0;           // 0 = the quality preset's
     // 0 flat, 1 bottom-up. Flat for every capture, whatever its size: there is

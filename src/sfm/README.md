@@ -239,7 +239,7 @@ spirula sfm auto IMAGES/ -o ws/ --camera-model opencv-fisheye
 spirula sfm extract IMAGES/ -o feats/
 spirula sfm match   feats/ -o matches.bin
 spirula sfm map     matches.bin feats/ -o sparse/ --images IMAGES/
-spirula sfm map     matches.bin feats/ -o sparse/ --compact-unused-features
+spirula sfm map     matches.bin feats/ -o sparse/ --no-compact-unused-features
 spirula sfm merge   sparse/ -o merged/
 spirula sfm ba      problem.txt --real df       # solver benchmark on a BAL problem
 spirula sfm ba      sparse/0 --real cpu        # ... the same solve, on the host
@@ -266,8 +266,9 @@ Environment: `SS_SFM_MAP_PROF=1` prints a mapper stage breakdown,
 `SS_SFM_DUMP_SG` / `SS_SFM_CMP_STEP` are BA solver debug hooks
 (`ba/README.md`).
 
-`--compact-unused-features` is an opt-in in-memory representation change, on
-`auto` and `map`. It retains the feature rows referenced by stored match records
+`--compact-unused-features` is an in-memory representation change, on `auto`
+and `map`, and is **on by default** (`--no-compact-unused-features` is the old
+behaviour). It retains the feature rows referenced by stored match records
 in stable order, remaps every stored match endpoint, and releases the temporary
 index map before constructing `Mapper`. Image and pair order, pair
 configuration, camera setup, match order, and referenced keypoint, color, and
@@ -277,7 +278,9 @@ what keeps that file indexing the feature files. For a normally verified
 `matches.bin`, the stored records are the verified correspondences; raw records
 with configuration zero are preserved as well. A model written under the flag
 indexes the compacted features, so `--resume` and `--audit` refuse a model whose
-keypoint counts disagree with the current run. Defaults off.
+keypoint counts disagree with the current run -- which is the one thing to know
+about the default change: a model written before it was on has to be resumed
+with `--no-compact-unused-features`.
 
 ## Options
 
@@ -303,11 +306,11 @@ spelling. A `bool` row is a switch and gets both `--name` and `--no-name`, and
 `--help` prints whichever direction changes the default.
 
 Three things stay hand-parsed in `src/app/cli/sfm_main.cpp`, because they do
-not name one scalar field: `--camera-model PREFIX=MODEL` and `--focal PREFIX=F`
-(which also feed the per-group override list), `--no-manage` (four fields at
-once), and the flags that pick what a command *does* rather than how —
-`-o/--output`, `map --audit`, `auto --no-masks`. The CLI offers a token to the
-hand-parsed cases first, so those names always win.
+not name one scalar field: `--camera-model PREFIX=MODEL`, `--focal PREFIX=F` and
+`--distortion PREFIX=k1,k2,...` (which also feed the per-group override list),
+`--no-manage` (four fields at once), and the flags that pick what a command
+*does* rather than how — `-o/--output`, `map --audit`, `auto --no-masks`. The
+CLI offers a token to the hand-parsed cases first, so those names always win.
 
 Pipeline knobs are fanned out into the stage structs by `SfmConfig::finalize()`
 and nowhere else, so the CLI and the GUI cannot disagree about what
@@ -357,6 +360,52 @@ model is written, so the trainer's own normalization comes out as the identity
 `splat.ply`, a mesh, a bare model in a viewer — is upright too rather than
 tilted with no way left to recover the transform. `map/Orient.h` has the
 algebra and the caveats; `--no-orient` keeps the mapper's raw gauge.
+
+### The finishing passes
+
+Reconstruction ends with up to two more global bundle adjustments, on models
+nothing else will touch. That is what makes them safe: a parameter that turns
+out to be badly conditioned can only spoil its own intrinsics, because there is
+no growth pass left to build on the result.
+
+The free intrinsics of a camera group are a **prefix** of `(focal, distortion,
+cx, cy)` — the group's free count alone tells the solver how many columns it
+owns, which is what buys COLMAP's three refine switches without a per-parameter
+mask in the hot kernel (D50). Two consequences: releasing more is always
+releasing a longer prefix, and holding the distortion holds the principal point
+with it. Asked for both explicitly — `--refine-principal-point
+--no-refine-extra-params` — the run stops with a usage error rather than
+honouring half of it; in the finishing pass, where the principal point is on by
+default, `--no-final-extra-params` simply takes `--final-principal-point` with
+it.
+
+- `--refine-principal-point` (off) and `--final-principal-point` (on) hold
+  `cx,cy` while the model is built, where the parameter is nearly a camera
+  rotation wearing a different name, then release them once — for a single
+  camera group with at least `--pp-min-images` images behind it (D50, D51).
+- `--refine-extra-params` (on) and `--final-extra-params` (on) are the same pair
+  for the distortion coefficients, defaulting the other way because fitting them
+  is most of what a distortion model is for. `--no-refine-extra-params` holds
+  them at whatever the camera setup started them at and leaves them to the
+  finishing pass (D72). That is worth having for a lens with little distortion,
+  and for the early small models where the terms can absorb pose error before
+  there is enough geometry to contradict them. Both off keeps a calibration you
+  already trust exactly as given — principal point included, since it sits
+  behind the distortion in the prefix.
+- `--distortion k1,k2,...` is where those coefficients start, in the camera
+  model's own order (`opencv`: `k1,k2,p1,p2`; `radial`: `k1,k2`). It takes
+  `PREFIX=k1,k2,...` for one group, as `--camera-model` and `--focal` do, and it
+  travels to `map` inside `matches.bin` with the rest of the camera setup.
+- `--final-per-image-intrinsics` (off) adds one pass after those, in which every
+  registered image gets its own camera copied from the group it was in (D73).
+  Sharing a camera is what makes a focal observable while the model is being
+  built; a finished model can afford to let each frame depart from the group,
+  which is what follows a lens that drifted — a zoom that crept, a focus that
+  breathed. `sanitizeCameras` deliberately does *not* run here: it clamps a
+  camera back towards its group's default, and a camera of one image has no
+  group left to be clamped to. The solve is much larger — every image owns up to
+  twelve intrinsics columns of the reduced system — so on anything but a small
+  capture `--ba-solver auto` lands on CG.
 
 `--mapper flat|bottom-up` picks the schedule (see the stage graph; flat is the
 default for every capture, and there is no size-based switch);

@@ -304,9 +304,9 @@ int cmdSelftest(int argc, char** argv) {
         CameraSetupOptions so;
         so.mode = CameraMode::Folder;
         so.model = CamModel::OpenCV;
-        parseCameraOverride("cam0=thin-prism-fisheye", false, so.overrides);
-        parseCameraOverride("cam1=thin-prism-fisheye", false, so.overrides);
-        parseCameraOverride("cam0=520", true, so.overrides);
+        parseCameraOverride("cam0=thin-prism-fisheye", OverrideKind::Model, so.overrides);
+        parseCameraOverride("cam1=thin-prism-fisheye", OverrideKind::Model, so.overrides);
+        parseCameraOverride("cam0=520", OverrideKind::Focal, so.overrides);
         CameraSetup cs = buildCameras(imgs, fsv, so);
         bool gok = cs.count() == 3 && cs.ids[0] == cs.ids[1] && cs.ids[2] == cs.ids[3] &&
                    cs.ids[4] == cs.ids[5] && cs.ids[0] != cs.ids[2] && cs.ids[2] != cs.ids[4];
@@ -321,6 +321,23 @@ int cmdSelftest(int argc, char** argv) {
         gok = gok && cs.focal_known.count(cs.ids[0]) && cs.focal_known.count(cs.ids[2]) &&
               !cs.focal_known.count(cs.ids[4]);
         gok = gok && cs.mixed() && cs.anyWide();
+        // --distortion, dataset-wide and per group, in each model's own BA
+        // order: k1,k2,p1,p2 for opencv and k1,k2,p1,p2,k3,k4,sx1,sy1 for the
+        // thin prism, so the same list means different fields per group (D72).
+        CameraSetupOptions sod = so;
+        parseDistortion("-0.11,0.02,0.001,-0.002", sod.extra);
+        parseCameraOverride("cam1=-0.4,0.09,0,0,0.01", OverrideKind::Distortion, sod.overrides);
+        CameraSetup csd = buildCameras(imgs, fsv, sod);
+        const Camera& dpin = csd.cameras.at(csd.ids[0]);
+        const Camera& dfar = csd.cameras.at(csd.ids[4]);
+        gok = gok && dpin.k1 == -0.11 && dpin.k2 == 0.02 && dpin.p1 == 0.001 &&
+              dpin.p2 == -0.002 && dpin.k3 == 0;
+        gok = gok && dfar.k1 == -0.4 && dfar.k2 == 0.09 && dfar.p1 == 0 && dfar.p2 == 0 &&
+              dfar.k3 == 0.01 && dfar.k4 == 0 && dfar.sx1 == 0 && dfar.sy1 == 0;
+        // A trailing comma, a stray token, an empty list: all malformed.
+        std::vector<double> junk;
+        gok = gok && !parseDistortion("0.1,", junk) && !parseDistortion("0.1,x", junk) &&
+              !parseDistortion("", junk);
         // --no-exif-focal leaves the pinhole at COLMAP's 1.2*max(w,h) guess.
         CameraSetupOptions so2 = so;
         so2.exif_focal = false;

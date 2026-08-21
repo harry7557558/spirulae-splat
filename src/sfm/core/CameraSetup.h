@@ -61,12 +61,41 @@ struct CameraOverride {
     CamModel model = CamModel::OpenCV;
     bool has_focal = false;
     double focal = 0;
+    // Starting distortion coefficients, in the model's BA order
+    // (sfm/core/Camera.h packIntrinsics). Empty = start at zero.
+    bool has_extra = false;
+    std::vector<double> extra;
 };
 
-// Parse "MODEL" or "PREFIX=MODEL" (likewise "F" / "PREFIX=F") into `out`,
-// merging into an existing entry for the same prefix so --camera-model and
-// --focal can name the same group.
-inline bool parseCameraOverride(const std::string& arg, bool is_focal,
+// Which of the three per-group settings a `PREFIX=VALUE` argument carries.
+enum class OverrideKind { Model, Focal, Distortion };
+
+// "k1,k2,..." -> coefficients in the camera model's BA order. False on an empty
+// list or any token that is not wholly a number.
+inline bool parseDistortion(const std::string& v, std::vector<double>& out) {
+    out.clear();
+    if (v.empty()) return false;
+    for (size_t i = 0;;) {
+        size_t c = v.find(',', i);
+        if (c == std::string::npos) c = v.size();
+        const std::string tok = v.substr(i, c - i);
+        try {
+            size_t used = 0;
+            out.push_back(std::stod(tok, &used));
+            if (used != tok.size()) return false;
+        } catch (const std::exception&) {
+            return false;
+        }
+        if (c == v.size()) break;
+        i = c + 1;
+    }
+    return true;
+}
+
+// Parse "VALUE" or "PREFIX=VALUE" into `out`, merging into an existing entry
+// for the same prefix so --camera-model, --focal and --distortion can name the
+// same group. A distortion value is a comma-separated list.
+inline bool parseCameraOverride(const std::string& arg, OverrideKind kind,
                                 std::vector<CameraOverride>& out) {
     std::string prefix, value = arg;
     size_t eq = arg.find('=');
@@ -77,13 +106,16 @@ inline bool parseCameraOverride(const std::string& arg, bool is_focal,
     }
     CamModel m = CamModel::OpenCV;
     double f = 0;
-    if (is_focal) {
+    std::vector<double> extra;
+    if (kind == OverrideKind::Focal) {
         try {
             f = std::stod(value);
         } catch (const std::exception&) {
             return false;
         }
         if (!(f > 0)) return false;
+    } else if (kind == OverrideKind::Distortion) {
+        if (!parseDistortion(value, extra)) return false;
     } else if (!parseCamModelName(value, m)) {
         return false;
     }
@@ -95,8 +127,11 @@ inline bool parseCameraOverride(const std::string& arg, bool is_focal,
         e = &out.back();
         e->prefix = prefix;
     }
-    if (is_focal) { e->has_focal = true; e->focal = f; }
-    else { e->has_model = true; e->model = m; }
+    switch (kind) {
+        case OverrideKind::Focal: e->has_focal = true; e->focal = f; break;
+        case OverrideKind::Distortion: e->has_extra = true; e->extra = std::move(extra); break;
+        case OverrideKind::Model: e->has_model = true; e->model = m; break;
+    }
     return true;
 }
 
@@ -106,6 +141,9 @@ struct CameraSetupOptions {
     // the group starts at Camera::defaultFor's geometric guess.
     CamModel model = CamModel::OpenCV;
     double focal = 0;
+    // Dataset-wide starting distortion, in the model's BA order; a group an
+    // override names uses that instead. Empty = start at zero, as COLMAP does.
+    std::vector<double> extra;
     std::vector<CameraOverride> overrides;
     // Use the focal length EXIF recorded (features.bin v3) when no explicit
     // --focal covers the group. On by default: it is a measurement of the lens
@@ -408,6 +446,8 @@ inline CameraSetup buildCameras(const std::vector<ImageEntry>& images,
             given = true;
         }
         out.cameras[id] = Camera::defaultFor(id, feats[i].width, feats[i].height, focal, model);
+        if (ovr && ovr->has_extra) setExtraParams(out.cameras[id], ovr->extra);
+        else if (!opt.extra.empty()) setExtraParams(out.cameras[id], opt.extra);
         // A spherical camera has no focal length: the image dimensions are the
         // calibration, exactly, so it counts as known however the run was
         // invoked. That is what keeps both focal searches (the two-view one

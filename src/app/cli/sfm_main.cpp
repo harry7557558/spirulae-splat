@@ -278,36 +278,57 @@ static int tableFlag(SfmConfig& cfg, uint32_t cmd, const char* cmdname, const st
     return 0;
 }
 
-// --camera-model / --focal: a bare value sets the dataset-wide default (which
-// is a table field), PREFIX=VALUE names one camera group (which is not).
-static bool cameraOverride(SfmConfig& cfg, bool is_focal, const std::string& v,
+// --camera-model / --focal / --distortion: a bare value sets the dataset-wide
+// default (which is a table field), PREFIX=VALUE names one camera group (which
+// is not).
+static bool cameraOverride(SfmConfig& cfg, OverrideKind kind, const std::string& v,
                            std::set<std::string>& seen, std::string& err) {
-    if (!parseCameraOverride(v, is_focal, cfg.camera.overrides)) {
-        err = std::string("bad --") + (is_focal ? "focal" : "camera-model") + " '" + v + "' (" +
-              (is_focal ? "F or PREFIX=F" : "MODEL or PREFIX=MODEL") + ")";
+    const char* flag = kind == OverrideKind::Focal        ? "focal"
+                       : kind == OverrideKind::Distortion ? "distortion"
+                                                          : "camera-model";
+    const char* form = kind == OverrideKind::Focal        ? "F or PREFIX=F"
+                       : kind == OverrideKind::Distortion ? "k1,k2,... or PREFIX=k1,k2,..."
+                                                          : "MODEL or PREFIX=MODEL";
+    if (!parseCameraOverride(v, kind, cfg.camera.overrides)) {
+        err = std::string("bad --") + flag + " '" + v + "' (" + form + ")";
         return false;
     }
     if (v.find('=') != std::string::npos) return true;  // per-group only
-    if (is_focal) {
-        cfg.focal = std::atof(v.c_str());
-        seen.insert("focal");
-    } else {
-        CamModel m;
-        if (!parseCamModelName(v, m)) {
-            err = "unknown --camera-model '" + v + "'";
-            return false;
+    switch (kind) {
+        case OverrideKind::Focal:
+            cfg.focal = std::atof(v.c_str());
+            break;
+        case OverrideKind::Distortion:
+            cfg.distortion = v;
+            break;
+        case OverrideKind::Model: {
+            CamModel m;
+            if (!parseCamModelName(v, m)) {
+                err = "unknown --camera-model '" + v + "'";
+                return false;
+            }
+            cfg.camera_model = v;
+            break;
         }
-        cfg.camera_model = v;
-        seen.insert("camera-model");
     }
+    seen.insert(flag);
+    return true;
+}
+
+// The three flags above, recognized by name; false for anything else.
+static bool cameraOverrideFlag(const std::string& a, OverrideKind& kind) {
+    if (a == "--camera-model") kind = OverrideKind::Model;
+    else if (a == "--focal") kind = OverrideKind::Focal;
+    else if (a == "--distortion") kind = OverrideKind::Distortion;
+    else return false;
     return true;
 }
 
 // Did the command line say anything about cameras? If not, `map` keeps the
 // setup verification recorded in matches.bin rather than deriving its own (D47).
 static bool sawCameraFlags(const std::set<std::string>& seen) {
-    static const char* kCameraFlags[] = {"camera-mode", "camera-model", "focal", "exif-focal",
-                                         "exif-groups", "exif-focal-tol"};
+    static const char* kCameraFlags[] = {"camera-mode", "camera-model", "focal", "distortion",
+                                         "exif-focal", "exif-groups", "exif-focal-tol"};
     for (const char* f : kCameraFlags)
         if (seen.count(f)) return true;
     return false;
@@ -758,29 +779,34 @@ static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDataba
     return models;
 }
 
-// One last global bundle adjustment per model with the principal point
-// released (D51). COLMAP's documentation: hold it during reconstruction, where
-// it is ill-posed, then "try to refine the principal point in global bundle
-// adjustment" once every image is in and the problem is constrained --
-// "especially when sharing intrinsic parameters between multiple images",
-// which is why a camera group needs `pp_min_images` behind it to qualify.
-//
-// Runs after assembly, on models nothing else will touch, so a group whose
-// principal point turns out to be badly conditioned can only spoil its own
-// intrinsics -- there is no growth pass left to build on the result. Mapper::
-// polish skips models with more than one camera group; measured, the gain
-// tracks how far the *reference's* own principal point sits from the image
-// centre (D51).
-static std::vector<Reconstruction> polishModels(Mapper& mapper,
+// The finishing passes: one global bundle adjustment per model releasing what
+// the mapper held, then optionally another with every image on its own
+// intrinsics. src/sfm/README.md, "The finishing passes", has the reasoning.
+static std::vector<Reconstruction> finishModels(Mapper& mapper,
                                                 std::vector<Reconstruction> models,
-                                                bool verbose, double& secs) {
+                                                const SfmConfig& cfg, bool verbose,
+                                                double& secs) {
     const double t0 = now();
-    for (Reconstruction& m : models)
-        if (m.numRegistered() >= 2) m = mapper.polish(m);
+    // Nothing to release is a solve that ends where it started, and a line in
+    // the log saying it ran.
+    if (cfg.final_principal_point ||
+        (cfg.final_extra_params && !cfg.mapper.refine_extra_params)) {
+        for (Reconstruction& m : models)
+            if (m.numRegistered() >= 2)
+                m = mapper.polish(m, cfg.final_principal_point, cfg.final_extra_params);
+        if (verbose)
+            L::err(Tag::Map, M::map_final_intrinsics,
+                   {(long long)models.size(), L::num(now() - t0, 1)});
+    }
+    if (cfg.final_per_image_intrinsics) {
+        const double t1 = now();
+        for (Reconstruction& m : models)
+            m = mapper.perImageIntrinsics(m, cfg.final_extra_params);
+        if (verbose)
+            L::err(Tag::Map, M::map_per_image_done,
+                   {(long long)models.size(), L::num(now() - t1, 1)});
+    }
     secs = now() - t0;
-    if (verbose)
-        L::err(Tag::Map, M::map_pp_done,
-               {(long long)models.size(), L::num(secs, 1)});
     return models;
 }
 
@@ -1455,10 +1481,10 @@ static int cmdMatch(int argc, char** argv) {
             sfm::progress::set_dir(argv[++i]);
             continue;
         }
-        if (a == "--camera-model" || a == "--focal") {
+        if (OverrideKind kind; cameraOverrideFlag(a, kind)) {
             if (i + 1 >= argc) return usageError("match", a + ": missing value");
             std::string err;
-            if (!cameraOverride(cfg, a == "--focal", argv[++i], seen, err))
+            if (!cameraOverride(cfg, kind, argv[++i], seen, err))
                 return usageError("match", err);
             continue;
         }
@@ -1528,10 +1554,10 @@ static int cmdMap(int argc, char** argv) {
             cfg.manager.do_audit = cfg.manager.do_split = cfg.manager.do_duplicate_split = false;
             continue;
         }
-        if (a == "--camera-model" || a == "--focal") {
+        if (OverrideKind kind; cameraOverrideFlag(a, kind)) {
             if (i + 1 >= argc) return usageError("map", a + ": missing value");
             std::string err;
-            if (!cameraOverride(cfg, a == "--focal", argv[++i], seen, err))
+            if (!cameraOverride(cfg, kind, argv[++i], seen, err))
                 return usageError("map", err);
             continue;
         }
@@ -1739,9 +1765,9 @@ static int cmdMap(int argc, char** argv) {
         }
     }
 
-    if (cfg.final_principal_point) {
-        double t_pp = 0;
-        models = polishModels(mapper, std::move(models), opt.verbose, t_pp);
+    {
+        double t_finish = 0;
+        models = finishModels(mapper, std::move(models), cfg, opt.verbose, t_finish);
     }
     printAssembly(ast, models.size());
 
@@ -1911,10 +1937,10 @@ static int cmdAuto(int argc, char** argv) {
             cfg.manager.do_audit = cfg.manager.do_split = cfg.manager.do_duplicate_split = false;
             continue;
         }
-        if (a == "--camera-model" || a == "--focal") {
+        if (OverrideKind kind; cameraOverrideFlag(a, kind)) {
             if (i + 1 >= argc) return usageError("auto", a + ": missing value");
             std::string err;
-            if (!cameraOverride(cfg, a == "--focal", argv[++i], seen, err))
+            if (!cameraOverride(cfg, kind, argv[++i], seen, err))
                 return usageError("auto", err);
             continue;
         }
@@ -2066,10 +2092,10 @@ static int cmdAuto(int argc, char** argv) {
     std::vector<Reconstruction> models = runMapper(mapper, db, feats, cfg, ast);
     double t_map = now() - t0;
 
-    if (cfg.final_principal_point) {
-        double t_pp = 0;
-        models = polishModels(mapper, std::move(models), verbose, t_pp);
-        t_map += t_pp;
+    {
+        double t_finish = 0;
+        models = finishModels(mapper, std::move(models), cfg, verbose, t_finish);
+        t_map += t_finish;
     }
 
     resolveImageNames(models, imagedir);

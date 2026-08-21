@@ -398,6 +398,16 @@ std::string SfmConfig::finalize(uint32_t cmd) {
         return "unknown --camera-mode '" + camera_mode + "'";
     camera.mode_explicit = camera_mode_pinned;
     camera.focal = focal;
+    if (!distortion.empty() && !parseDistortion(distortion, camera.extra))
+        return "bad --distortion '" + distortion + "' (k1,k2,... or PREFIX=k1,k2,...)";
+    // The free intrinsics are a prefix of (focal, distortion, principal point):
+    // holding the middle holds the tail (D50, D72). Two explicit flags saying
+    // otherwise is an error; the finishing pass's default gives way instead.
+    if (mapper.refine_principal_point && !mapper.refine_extra_params)
+        return "--refine-principal-point cannot be combined with "
+               "--no-refine-extra-params: bundle adjustment frees a prefix of "
+               "(focal, distortion, principal point)";
+    if (!final_extra_params) final_principal_point = false;
     // The model a group with no explicit entry falls back to, which is the same
     // question --camera-model answers for the ones that have entries.
     mapper.camera_model = camera.model;

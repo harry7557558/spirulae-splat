@@ -765,62 +765,62 @@ SS_MSG(desc_map_1,
        "büyütülür."));
 
 SS_MSG(desc_map_2,
-    EN("--camera-model and --focal take either a dataset-wide value or "
-       "PREFIX=VALUE naming one camera group by image path, so a rig can mix "
-       "models. Say nothing about cameras and the setup recorded by verification "
-       "is used as it stands."),
-    JA("--camera-model と --focal は、データセット全体に効く値のほか、画像パスで"
-       "カメラグループを 1 つ指定する PREFIX=VALUE の形も取れるため、リグごとに"
-       "モデルを混在させられます。カメラについて何も指定しなければ、検証が記録した"
-       "構成がそのまま使われます。"),
-    ZH_HANS("--camera-model 与 --focal 既可给出作用于整个数据集的值，也可写成 "
-            "PREFIX=VALUE，按图像路径指定某一个相机组，因此同一套设备可以混用不同模型。"
-            "若完全不提相机，就直接沿用验证阶段记录下来的配置。"),
-    ZH_HANT("--camera-model 與 --focal 既可給出作用於整個資料集的值，也可寫成 "
-            "PREFIX=VALUE，按影像路徑指定某一個相機群組，因此同一套設備可以混用不同模型。"
-            "若完全不提相機，就直接沿用驗證階段記錄下來的組態。"),
-    KO("--camera-model 과 --focal 은 데이터셋 전체에 걸리는 값은 물론, 이미지 경로로 "
-       "카메라 그룹 하나를 지목하는 PREFIX=VALUE 형태도 받으므로 한 리그에서 여러 "
-       "모델을 섞을 수 있습니다. 카메라에 대해 아무것도 말하지 않으면 검증이 기록한 "
-       "구성을 그대로 씁니다."),
-    DE("--camera-model und --focal nehmen entweder einen Wert für den ganzen "
-       "Datensatz oder PREFIX=VALUE, das über den Bildpfad eine Kameragruppe "
-       "benennt, sodass ein Rig Modelle mischen kann. Sagt man nichts über "
-       "Kameras, wird der von der Prüfung vermerkte Aufbau unverändert "
-       "verwendet."),
-    FR("--camera-model et --focal acceptent soit une valeur pour tout le jeu de "
-       "données, soit PREFIX=VALUE désignant un groupe de caméras par chemin "
-       "d'image, si bien qu'un rig peut mêler des modèles. Ne rien dire des "
-       "caméras et la configuration consignée par la vérification est reprise "
-       "telle quelle."),
-    ES("--camera-model y --focal aceptan o bien un valor para todo el conjunto "
-       "de datos, o bien PREFIX=VALUE que nombra un grupo de cámaras por ruta de "
-       "imagen, de modo que un equipo puede mezclar modelos. Si no se dice nada "
-       "sobre las cámaras, se usa tal cual la configuración que anotó la "
-       "verificación."),
-    PT("--camera-model e --focal aceitam ou um valor para todo o conjunto de "
-       "dados, ou PREFIX=VALUE que nomeia um grupo de câmeras pelo caminho da "
-       "imagem, de modo que um equipamento pode misturar modelos. Se nada for "
-       "dito sobre as câmeras, usa-se tal como está a configuração que a "
+    EN("--camera-model, --focal and --distortion take either a dataset-wide "
+       "value or PREFIX=VALUE naming one camera group by image path, so a rig "
+       "can mix models. Say nothing about cameras and the setup recorded by "
+       "verification is used as it stands."),
+    JA("--camera-model と --focal と --distortion は、データセット全体に効く値の"
+       "ほか、画像パスでカメラグループを 1 つ指定する PREFIX=VALUE の形も取れる"
+       "ため、リグごとにモデルを混在させられます。カメラについて何も指定しなければ、"
+       "検証が記録した構成がそのまま使われます。"),
+    ZH_HANS("--camera-model、--focal 与 --distortion 既可给出作用于整个数据集的值，"
+            "也可写成 PREFIX=VALUE，按图像路径指定某一个相机组，因此同一套设备可以"
+            "混用不同模型。若完全不提相机，就直接沿用验证阶段记录下来的配置。"),
+    ZH_HANT("--camera-model、--focal 與 --distortion 既可給出作用於整個資料集的值，"
+            "也可寫成 PREFIX=VALUE，按影像路徑指定某一個相機群組，因此同一套設備"
+            "可以混用不同模型。若完全不提相機，就直接沿用驗證階段記錄下來的組態。"),
+    KO("--camera-model 과 --focal 과 --distortion 은 데이터셋 전체에 걸리는 값은 "
+       "물론, 이미지 경로로 카메라 그룹 하나를 지목하는 PREFIX=VALUE 형태도 받으므로 "
+       "한 리그에서 여러 모델을 섞을 수 있습니다. 카메라에 대해 아무것도 말하지 "
+       "않으면 검증이 기록한 구성을 그대로 씁니다."),
+    DE("--camera-model, --focal und --distortion nehmen entweder einen Wert für "
+       "den ganzen Datensatz oder PREFIX=VALUE, das über den Bildpfad eine "
+       "Kameragruppe benennt, sodass ein Rig Modelle mischen kann. Sagt man "
+       "nichts über Kameras, wird der von der Prüfung vermerkte Aufbau "
+       "unverändert verwendet."),
+    FR("--camera-model, --focal et --distortion acceptent soit une valeur pour "
+       "tout le jeu de données, soit PREFIX=VALUE désignant un groupe de caméras "
+       "par chemin d'image, si bien qu'un rig peut mêler des modèles. Ne rien "
+       "dire des caméras et la configuration consignée par la vérification est "
+       "reprise telle quelle."),
+    ES("--camera-model, --focal y --distortion aceptan o bien un valor para todo "
+       "el conjunto de datos, o bien PREFIX=VALUE que nombra un grupo de cámaras "
+       "por ruta de imagen, de modo que un equipo puede mezclar modelos. Si no se "
+       "dice nada sobre las cámaras, se usa tal cual la configuración que anotó "
+       "la verificación."),
+    PT("--camera-model, --focal e --distortion aceitam ou um valor para todo o "
+       "conjunto de dados, ou PREFIX=VALUE que nomeia um grupo de câmeras pelo "
+       "caminho da imagem, de modo que um equipamento pode misturar modelos. Se "
+       "nada for dito sobre as câmeras, usa-se tal como está a configuração que a "
        "verificação anotou."),
-    IT("--camera-model e --focal accettano o un valore per l'intero dataset o "
-       "PREFIX=VALUE che nomina un gruppo di camere tramite il percorso "
+    IT("--camera-model, --focal e --distortion accettano o un valore per l'intero "
+       "dataset o PREFIX=VALUE che nomina un gruppo di camere tramite il percorso "
        "dell'immagine, così un rig può mescolare modelli. Se non si dice nulla "
        "sulle camere, si usa così com'è la configurazione annotata dalla "
        "verifica."),
-    NL("--camera-model en --focal nemen ofwel een waarde voor de hele dataset, "
-       "ofwel PREFIX=VALUE dat via het beeldpad één cameragroep noemt, zodat een "
-       "rig modellen kan mengen. Zeg niets over camera's en de door de "
-       "verificatie genoteerde opzet wordt onveranderd gebruikt."),
-    RU("--camera-model и --focal принимают либо значение на весь набор данных, "
-       "либо PREFIX=VALUE, называющее одну группу камер по пути изображения, так "
-       "что установка может смешивать модели. Ничего не сказав о камерах, вы "
-       "получите тот состав, что записала проверка, как есть."),
-    TR("--camera-model ve --focal, ya tüm veri kümesi için bir değer alır ya da "
-       "görüntü yoluyla tek bir kamera grubunu adlandıran PREFIX=VALUE biçimini "
-       "alır; böylece bir düzenek modelleri karıştırabilir. Kameralar hakkında "
-       "hiçbir şey söylenmezse, doğrulamanın kaydettiği düzen olduğu gibi "
-       "kullanılır."));
+    NL("--camera-model, --focal en --distortion nemen ofwel een waarde voor de "
+       "hele dataset, ofwel PREFIX=VALUE dat via het beeldpad één cameragroep "
+       "noemt, zodat een rig modellen kan mengen. Zeg niets over camera's en de "
+       "door de verificatie genoteerde opzet wordt onveranderd gebruikt."),
+    RU("--camera-model, --focal и --distortion принимают либо значение на весь "
+       "набор данных, либо PREFIX=VALUE, называющее одну группу камер по пути "
+       "изображения, так что установка может смешивать модели. Ничего не сказав о "
+       "камерах, вы получите тот состав, что записала проверка, как есть."),
+    TR("--camera-model, --focal ve --distortion, ya tüm veri kümesi için bir "
+       "değer alır ya da görüntü yoluyla tek bir kamera grubunu adlandıran "
+       "PREFIX=VALUE biçimini alır; böylece bir düzenek modelleri karıştırabilir. "
+       "Kameralar hakkında hiçbir şey söylenmezse, doğrulamanın kaydettiği düzen "
+       "olduğu gibi kullanılır."));
 
 SS_MSG(desc_merge_1,
     EN("Merges models on the images they share: those give the similarity "

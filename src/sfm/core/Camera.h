@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "sfm/geometry/LinAlg.h"
 
@@ -293,34 +294,25 @@ struct CamModelInfo {
     int colmap_id;         // COLMAP cameras.bin model id
     int ba_model;          // index into sfm/ba/Problem.h kModels
     int ba_params;         // params in the packIntrinsics layout BA reads
+    int ba_focal;          // of those, leading params that are the focal length
     int ba_pp;             // of those, trailing params that are the principal point
     bool ba_refinable;     // false = BA reads the params but never changes them
     int colmap_params;     // params written to cameras.bin (packColmap layout)
     const char* cli_name;  // --camera-model value
 };
 
-// ba_model indices MUST match the order of kModels[] in sfm/ba/Problem.h:
-//   0 snavely, 1 snavely_f, 2 pinhole_radial, 3 opencv, 4 simple_pinhole,
-//   5 pinhole, 6 opencv_fisheye, 7 full_opencv, 8 thin_prism_fisheye,
-//   9 equirect
-//
-// ba_pp is how many *trailing* BA parameters are the principal point, and
-// ba_refinable says whether BA may touch this model's parameters at all. The BA
-// layout below deliberately differs from COLMAP's parameter order in exactly
-// one way -- (cx,cy) are moved to the end -- so that "what BA is allowed to
-// change" is always a prefix of the parameter vector, and the group's free
-// count alone tells the solver how many columns it owns. That buys COLMAP's
-// refine_focal_length / refine_principal_point / refine_extra_params split
-// without a per-parameter mask in the hot kernel (D50).
+// ba_model indices MUST match the order of kModels[] in sfm/ba/Problem.h.
+// The BA layout is (focal, extra params, cx, cy) -- COLMAP's order with the
+// principal point moved last, so "free" is always a prefix (D50).
 static constexpr CamModelInfo kCamModelInfo[] = {
-    {CamModel::SimplePinhole,    0, 4,  3, 2, true,   3, "simple-pinhole"},
-    {CamModel::Pinhole,          1, 5,  4, 2, true,   4, "pinhole"},
-    {CamModel::Radial,           3, 2,  5, 2, true,   5, "radial"},
-    {CamModel::OpenCV,           4, 3,  8, 2, true,   8, "opencv"},
-    {CamModel::OpenCVFisheye,    5, 6,  8, 2, true,   8, "opencv-fisheye"},
-    {CamModel::FullOpenCV,       6, 7, 12, 2, true,  12, "full-opencv"},
-    {CamModel::ThinPrismFisheye, 10, 8, 12, 2, true,  12, "thin-prism-fisheye"},
-    {CamModel::Equirect,         17, 9,  2, 0, false,  2, "equirectangular"},
+    {CamModel::SimplePinhole,    0, 4,  3, 1, 2, true,   3, "simple-pinhole"},
+    {CamModel::Pinhole,          1, 5,  4, 2, 2, true,   4, "pinhole"},
+    {CamModel::Radial,           3, 2,  5, 1, 2, true,   5, "radial"},
+    {CamModel::OpenCV,           4, 3,  8, 2, 2, true,   8, "opencv"},
+    {CamModel::OpenCVFisheye,    5, 6,  8, 2, 2, true,   8, "opencv-fisheye"},
+    {CamModel::FullOpenCV,       6, 7, 12, 2, 2, true,  12, "full-opencv"},
+    {CamModel::ThinPrismFisheye, 10, 8, 12, 2, 2, true,  12, "thin-prism-fisheye"},
+    {CamModel::Equirect,         17, 9,  2, 2, 0, false,  2, "equirectangular"},
 };
 
 inline const CamModelInfo& camInfo(CamModel m) {
@@ -329,17 +321,19 @@ inline const CamModelInfo& camInfo(CamModel m) {
     throw std::runtime_error("unknown camera model");
 }
 inline int camNumParams(CamModel m) { return camInfo(m).ba_params; }  // BA layout count
-// How many leading BA parameters bundle adjustment may change. `refine_pp`
-// mirrors COLMAP's refine_principal_point, which is false by default there and
-// here: the principal point of a wide lens is nearly indistinguishable from a
-// rotation of the camera, so letting it float buys nothing on a single-camera
-// capture (the drift is a gauge) and costs real accuracy on a multi-camera one,
-// where each group drifts its own way and the difference lands in their
-// relative orientation (D50).
-inline int camNumFreeParams(CamModel m, bool refine_pp = false) {
+// How many leading BA parameters bundle adjustment may change: COLMAP's
+// refine_focal_length / refine_extra_params / refine_principal_point (D50, D72).
+// Held distortion pins the principal point -- it sits behind it in the prefix.
+inline int camNumFreeParams(CamModel m, bool refine_pp = false, bool refine_extra = true) {
     const CamModelInfo& i = camInfo(m);
     if (!i.ba_refinable) return 0;
+    if (!refine_extra) return i.ba_focal;
     return refine_pp ? i.ba_params : i.ba_params - i.ba_pp;
+}
+// Distortion coefficients this model carries, in the BA layout's middle block.
+inline int camNumExtraParams(CamModel m) {
+    const CamModelInfo& i = camInfo(m);
+    return i.ba_params - i.ba_focal - i.ba_pp;
 }
 inline int camColmapParams(CamModel m) { return camInfo(m).colmap_params; }
 inline int camBaModel(CamModel m) { return camInfo(m).ba_model; }
@@ -423,6 +417,19 @@ inline void unpackIntrinsics(Camera& c, const double* d) {  // c.model set by ca
         case CamModel::Equirect:      c.fx = d[0] / (2.0 * M_PI); c.fy = d[1] / M_PI;
                                       c.cx = d[0] * 0.5; c.cy = d[1] * 0.5; break;
     }
+}
+
+// Set the distortion coefficients from a flat list in this model's BA order
+// (`--distortion`). Missing entries are zeroed, surplus ones ignored, so a list
+// written for one model does not silently mean something else on another.
+inline void setExtraParams(Camera& c, const std::vector<double>& v) {
+    const int n = camNumExtraParams(c.model);
+    if (n <= 0) return;
+    double d[12];
+    packIntrinsics(c, d);
+    const int off = camInfo(c.model).ba_focal;
+    for (int i = 0; i < n; i++) d[off + i] = i < (int)v.size() ? v[i] : 0.0;
+    unpackIntrinsics(c, d);
 }
 
 // Camera fields -> the *COLMAP* cameras.bin layout (camColmapParams slots):

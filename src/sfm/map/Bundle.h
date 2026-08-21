@@ -62,6 +62,10 @@ struct BundleOptions {
     // sharing intrinsic parameters between multiple images". Hence the
     // qualifier below -- sharing is what makes it observable (D51).
     bool refine_principal_point = false;
+    // Refine the distortion coefficients, or hold them at the setup's value.
+    // COLMAP's refine_extra_params, true there and here; holding them pins the
+    // principal point too, since the free set is a prefix (D72).
+    bool refine_extra_params = true;
     // Refuse a solve that does not fit the device rather than attempting it --
     // for a caller that can split the problem and retry (Mapper::jointRefine).
     bool over_budget_throws = false;
@@ -203,8 +207,9 @@ inline BundleLayout buildBundle(Reconstruction& rec, const BundleOptions& bopt) 
     P.intr.clear();
     for (size_t g = 0; g < camIds.size(); g++) {
         const Camera& c = rec.cameras[camIds[g]];
-        const bool pp = bopt.refine_principal_point && group_images[g] >= bopt.pp_min_images;
-        uint32_t nf = (uint32_t)camNumFreeParams(c.model, pp);
+        const bool pp = bopt.refine_principal_point && bopt.refine_extra_params &&
+                        group_images[g] >= bopt.pp_min_images;
+        uint32_t nf = (uint32_t)camNumFreeParams(c.model, pp, bopt.refine_extra_params);
         uint32_t off = (uint32_t)P.intr.size();
         uint32_t ni = (uint32_t)camNumParams(c.model);
         double ps[12];

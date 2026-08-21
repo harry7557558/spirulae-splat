@@ -519,6 +519,34 @@ SS_MSG(focal_help,
     TR("Piksel cinsinden başlangıç odak uzaklığı, 0 ise EXIF'ten ya da görüntü "
        "boyutundan tahmin edilir; PREFIX=F biçimini de alır"));
 
+SS_MSG(distortion_help,
+    EN("Distortion coefficients to start from, \"k1,k2,...\" in the model's own "
+       "order; also takes PREFIX=k1,k2,..."),
+    JA("歪み係数の初期値。モデル自身の並び順で \"k1,k2,...\" と書きます。"
+       "PREFIX=k1,k2,... の形も使えます"),
+    ZH_HANS("畸变系数的初值，按该相机模型自身的顺序写成 \"k1,k2,...\"。也可写成 "
+            "PREFIX=k1,k2,..."),
+    ZH_HANT("畸變係數的初值，按該相機模型自身的順序寫成 \"k1,k2,...\"。也可寫成 "
+            "PREFIX=k1,k2,..."),
+    KO("왜곡 계수의 시작값. 해당 모델 자신의 순서로 \"k1,k2,...\" 로 씁니다. "
+       "PREFIX=k1,k2,... 형태도 됩니다"),
+    DE("Startwerte der Verzeichnungskoeffizienten, \"k1,k2,...\" in der Reihenfolge "
+       "des Modells; nimmt auch PREFIX=k1,k2,..."),
+    FR("Coefficients de distorsion de départ, « k1,k2,... » dans l'ordre propre au "
+       "modèle ; accepte aussi PREFIX=k1,k2,..."),
+    ES("Coeficientes de distorsión de partida, \"k1,k2,...\" en el orden propio del "
+       "modelo; también acepta PREFIX=k1,k2,..."),
+    PT("Coeficientes de distorção iniciais, \"k1,k2,...\" na ordem do próprio "
+       "modelo; também aceita PREFIX=k1,k2,..."),
+    IT("Coefficienti di distorsione iniziali, \"k1,k2,...\" nell'ordine proprio del "
+       "modello; accetta anche PREFIX=k1,k2,..."),
+    NL("Beginwaarden van de vertekeningscoëfficiënten, \"k1,k2,...\" in de volgorde "
+       "van het model; neemt ook PREFIX=k1,k2,..."),
+    RU("Начальные коэффициенты дисторсии, \"k1,k2,...\" в порядке самой модели; "
+       "принимает и PREFIX=k1,k2,..."),
+    TR("Başlangıç bozulma katsayıları, modelin kendi sırasına göre \"k1,k2,...\"; "
+       "PREFIX=k1,k2,... biçimini de alır"));
+
 SS_MSG(exif_focal_help,
     EN("Use the focal length EXIF recorded when no --focal covers the group"),
     JA("--focal がそのグループを覆っていないとき、EXIF に記録された焦点距離を"
@@ -1251,6 +1279,86 @@ SS_MSG(pp_min_images_help,
     RU("Сколько изображений нужно группе, чтобы этот финальный проход по ней "
        "выполнился"),
     TR("Bu son geçişin bir grupta çalışması için gereken görüntü sayısı"));
+
+SS_MSG(refine_extra_params_help,
+    EN("Let BA move the distortion coefficients throughout; off holds them and "
+       "leaves them to the final pass (D72)"),
+    JA("バンドル調整に歪み係数を常時動かさせます。無効にすると固定し、最後の"
+       "仕上げに任せます（D72）"),
+    ZH_HANS("允许平差全程调整畸变系数；关闭则保持固定，交给最后一遍处理（D72）"),
+    ZH_HANT("允許平差全程調整畸變係數；關閉則保持固定，交給最後一遍處理（D72）"),
+    KO("번들 조정이 왜곡 계수를 계속 움직이도록 허용합니다. 끄면 고정해 두고 "
+       "마지막 단계에 맡깁니다(D72)"),
+    DE("Dem Bündelausgleich erlauben, die Verzeichnungskoeffizienten durchgehend "
+       "zu bewegen; aus hält sie fest und überlässt sie dem letzten Durchgang (D72)"),
+    FR("Laisser l'ajustement déplacer les coefficients de distorsion tout du "
+       "long ; désactivé, ils restent fixes jusqu'à la passe finale (D72)"),
+    ES("Dejar que el ajuste mueva los coeficientes de distorsión en todo momento; "
+       "desactivado los mantiene fijos hasta la pasada final (D72)"),
+    PT("Deixar o ajuste mover os coeficientes de distorção o tempo todo; desligado "
+       "os mantém fixos até a passagem final (D72)"),
+    IT("Lasciare che il bundle adjustment sposti i coefficienti di distorsione per "
+       "tutto il tempo; disattivo li tiene fermi fino alla passata finale (D72)"),
+    NL("De bundelaanpassing de vertekeningscoëfficiënten voortdurend laten "
+       "bijstellen; uit houdt ze vast tot de laatste ronde (D72)"),
+    RU("Разрешить уравниванию двигать коэффициенты дисторсии на всём протяжении; "
+       "выключено -- держит их до финального прохода (D72)"),
+    TR("Demet dengelemesinin bozulma katsayılarını baştan sona oynatmasına izin "
+       "ver; kapalıyken sabit tutulur ve son geçişe bırakılır (D72)"));
+
+SS_MSG(final_extra_params_help,
+    EN("Release the distortion coefficients for the global BA on the finished "
+       "model; off holds the principal point with them"),
+    JA("完成モデルへの全体バンドル調整で歪み係数を自由にします。無効にすると"
+       "主点も一緒に固定されます"),
+    ZH_HANS("在对完成模型的全局平差中放开畸变系数；关闭时主点也随之固定"),
+    ZH_HANT("在對完成模型的全域平差中放開畸變係數；關閉時主點也隨之固定"),
+    KO("완성된 모델의 전역 번들 조정에서 왜곡 계수를 풀어 줍니다. 끄면 주점도 함께 "
+       "고정됩니다"),
+    DE("Die Verzeichnungskoeffizienten im globalen Bündelausgleich auf dem "
+       "fertigen Modell freigeben; aus hält den Hauptpunkt mit ihnen fest"),
+    FR("Libérer les coefficients de distorsion pour l'ajustement global sur le "
+       "modèle terminé ; désactivé, le point principal reste fixe avec eux"),
+    ES("Liberar los coeficientes de distorsión en el ajuste global sobre el "
+       "modelo terminado; desactivado mantiene fijo también el punto principal"),
+    PT("Liberar os coeficientes de distorção no ajuste global sobre o modelo "
+       "terminado; desligado mantém o ponto principal fixo junto com eles"),
+    IT("Liberare i coefficienti di distorsione nel bundle adjustment globale sul "
+       "modello finito; disattivo tiene fermo con loro anche il punto principale"),
+    NL("De vertekeningscoëfficiënten vrijgeven in de globale bundelaanpassing op "
+       "het voltooide model; uit houdt het hoofdpunt er mee vast"),
+    RU("Освободить коэффициенты дисторсии в глобальном уравнивании готовой "
+       "модели; выключено -- вместе с ними держит и главную точку"),
+    TR("Bitmiş modeldeki genel demet dengelemesinde bozulma katsayılarını serbest "
+       "bırak; kapalıyken ana nokta da onlarla birlikte sabit tutulur"));
+
+SS_MSG(final_per_image_intrinsics_help,
+    EN("One more global BA at the very end with every image on its own "
+       "intrinsics, and nothing clamped back to the group (D73)"),
+    JA("最後にもう一度、画像ごとの内部パラメータで全体バンドル調整を行います。"
+       "グループの値への引き戻しもしません（D73）"),
+    ZH_HANS("最后再做一次全局平差，每张图像各用自己的内参，且不再把参数拉回相机组"
+            "（D73）"),
+    ZH_HANT("最後再做一次全域平差，每張影像各用自己的內參，且不再把參數拉回相機群組"
+            "（D73）"),
+    KO("맨 마지막에 이미지마다 자체 내부 파라미터로 전역 번들 조정을 한 번 더 "
+       "돌리며, 그룹 값으로 되돌리지 않습니다(D73)"),
+    DE("Ganz am Ende ein weiterer globaler Bündelausgleich mit eigener innerer "
+       "Orientierung je Bild, ohne Zurückholen auf die Gruppe (D73)"),
+    FR("Un ajustement global de plus tout à la fin, chaque image avec ses propres "
+       "paramètres internes et sans rappel vers le groupe (D73)"),
+    ES("Un ajuste global más al final, cada imagen con sus propios parámetros "
+       "internos y sin devolverlos al grupo (D73)"),
+    PT("Mais um ajuste global no fim, cada imagem com seus próprios parâmetros "
+       "internos e sem puxá-los de volta para o grupo (D73)"),
+    IT("Un ulteriore bundle adjustment globale alla fine, ogni immagine con i "
+       "propri parametri interni e senza richiamarli al gruppo (D73)"),
+    NL("Nog één globale bundelaanpassing helemaal aan het eind, elk beeld met "
+       "eigen interne parameters en zonder terughalen naar de groep (D73)"),
+    RU("Ещё одно глобальное уравнивание в самом конце: у каждого кадра свои "
+       "внутренние параметры, и возврата к группе нет (D73)"),
+    TR("En sonda bir genel demet dengelemesi daha: her görüntü kendi iç "
+       "parametreleriyle ve gruba geri çekilmeden (D73)"));
 
 SS_MSG(orient_help,
     EN("Write the model upright, centred and unit-scaled from the camera poses, "

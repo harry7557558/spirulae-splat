@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -702,6 +703,102 @@ int cmdMapSelftest(int argc, char** argv) {
             }
         }
         if (!focal_ok) { printf("  FAIL: focal did not converge with the PP held\n"); fails++; }
+    }
+
+    // ---- distortion held during mapping, found by the finishing pass (D72) ----
+    // The same arc through a lens that really distorts. Per-image intrinsics
+    // (D73) ride on the same model: eight images on one camera become eight.
+    {
+        Camera Kx = Camera::defaultFor(1, W, H, 1200, CamModel::OpenCV);
+        Kx.k1 = -0.06;
+        Kx.k2 = 0.01;
+
+        std::mt19937 r4(29);
+        std::normal_distribution<double> n4(0.0, 0.3);
+        std::vector<FeatureSet> fx(M);
+        std::vector<std::vector<char>> vx(M, std::vector<char>(N, 0));
+        for (int c = 0; c < M; c++) {
+            fx[c].width = W;
+            fx[c].height = H;
+            fx[c].keypoints.resize(N);
+            for (int p = 0; p < N; p++) {
+                Vec3 pc = mul(gt[c].R, pts[p]) + gt[c].t;
+                Vec2 px = Kx.project(pc);
+                if (pc.z > 0.1 && px.x > 0 && px.x < W && px.y > 0 && px.y < H) {
+                    fx[c].keypoints[p] = {(float)(px.x + n4(r4)), (float)(px.y + n4(r4)), 2, 0, 0};
+                    vx[c][p] = 1;
+                } else {
+                    fx[c].keypoints[p] = {-1000, -1000, 2, 0, 0};
+                }
+            }
+        }
+        MatchesDatabase dbx;
+        dbx.images.resize(M);
+        for (int c = 0; c < M; c++) dbx.images[c] = {"dis" + std::to_string(c), (uint32_t)N};
+        for (int i = 0; i < M; i++)
+            for (int j = i + 1; j < M; j++) {
+                TwoViewMatches tv;
+                tv.image1 = i;
+                tv.image2 = j;
+                tv.config = (int)TwoViewConfig::Uncalibrated;
+                for (int p = 0; p < N; p++)
+                    if (vx[i][p] && vx[j][p]) tv.matches.push_back({(uint32_t)p, (uint32_t)p, 0});
+                if (tv.matches.size() >= 15) dbx.pairs.push_back(std::move(tv));
+            }
+
+        MapperOptions ox = opt;
+        ox.camera_model = CamModel::OpenCV;
+        ox.focal_trials = 0;
+        ox.refine_extra_params = false;
+        Mapper mx(dbx, fx, ox);
+        std::vector<Reconstruction> mxs = mx.run();
+        const Camera& ch = mxs.front().cameras.at(1);
+        const bool held = ch.k1 == 0 && ch.k2 == 0 && ch.p1 == 0 && ch.p2 == 0;
+
+        Reconstruction fin = mx.polish(mxs.front(), /*free_pp=*/false, /*free_extra=*/true);
+        const Camera& cf = fin.cameras.at(1);
+        printf("  distortion: held (%.4f, %.4f) over %u image(s); finishing pass -> "
+               "(%.4f, %.4f), truth (%.4f, %.4f)\n",
+               ch.k1, ch.k2, mxs.front().numRegistered(), cf.k1, cf.k2, Kx.k1, Kx.k2);
+        if (!held) { printf("  FAIL: BA moved a held distortion coefficient\n"); fails++; }
+        // Recovered at least halfway, which no amount of gauge freedom gives
+        // for nothing: unlike the principal point, k1 is not a rotation.
+        if (std::fabs(cf.k1 - Kx.k1) > 0.5 * std::fabs(Kx.k1)) {
+            printf("  %s: the finishing pass did not recover the distortion\n",
+                   fp64_ba ? "FAIL" : "df-limited");
+            if (fp64_ba) fails++;
+        }
+        // ... and holding them must not freeze the focal alongside.
+        if (std::fabs(ch.focal() - 1200.0) > 0.10 * 1200.0) {
+            printf("  FAIL: focal did not converge with the distortion held\n");
+            fails++;
+        }
+
+        Reconstruction per = mx.perImageIntrinsics(fin);
+        std::set<uint32_t> percam;
+        for (const auto& kv : per.images)
+            if (kv.second.registered) percam.insert(kv.second.camera_id);
+        double spread = 0;
+        for (const auto& kv : per.cameras)
+            spread = std::max(spread, std::fabs(kv.second.focal() - cf.focal()));
+        printf("  per-image intrinsics: %zu camera(s) over %u image(s), focal spread %.2f px\n",
+               percam.size(), per.numRegistered(), spread);
+        if (percam.size() != per.numRegistered() || per.cameras.size() != percam.size()) {
+            printf("  FAIL: the per-image pass did not give every image its own camera\n");
+            fails++;
+        }
+        if (per.numRegistered() != fin.numRegistered()) {
+            printf("  FAIL: the per-image pass lost images\n");
+            fails++;
+        }
+        // Free per-image intrinsics can only fit the same observations better.
+        // A synthetic capture whose lens really is shared should nonetheless
+        // stay near it, which is what makes a runaway visible.
+        if (!(spread < 0.05 * cf.focal())) {
+            printf("  %s: per-image focals ran away from the shared solution\n",
+                   fp64_ba ? "FAIL" : "df-limited");
+            if (fp64_ba) fails++;
+        }
     }
 
     // ---- an equirectangular (360) capture (D49) ----

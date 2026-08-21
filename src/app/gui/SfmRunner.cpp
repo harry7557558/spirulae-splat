@@ -191,6 +191,9 @@ void SfmRunner::take_reconstruction(SfmJob& job) {
     job.overlap = _live.overlap;
     job.loop_closure = _live.loop_closure;
     job.init_focal_px = _live.init_focal_px;
+    job.init_distortion = _live.init_distortion;
+    job.distortion_refine = _live.distortion_refine;
+    job.final_per_image_intrinsics = _live.final_per_image_intrinsics;
     job.max_features = _live.max_features;
     job.max_image_size = _live.max_image_size;
     job.mapper = _live.mapper;
@@ -531,6 +534,16 @@ void SfmRunner::run(SfmJob job) {
                 argv.push_back("--focal");
                 argv.push_back(buf);
             }
+            if (!job.init_distortion.empty()) {
+                argv.push_back("--distortion");
+                argv.push_back(job.init_distortion);
+            }
+            // Two flags, three states: hold during mapping, and hold in the
+            // finishing pass as well.
+            if (job.distortion_refine >= 1) argv.push_back("--no-refine-extra-params");
+            if (job.distortion_refine >= 2) argv.push_back("--no-final-extra-params");
+            if (job.final_per_image_intrinsics)
+                argv.push_back("--final-per-image-intrinsics");
             append_camera_overrides(job, prep, argv);
             if (job.max_features > 0) {
                 // Each frontend has its own count flag, because their budgets

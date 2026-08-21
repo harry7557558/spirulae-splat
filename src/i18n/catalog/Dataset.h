@@ -5704,6 +5704,283 @@ SS_MSG(initial_focal_px_help,
        "eder. Balıkgözünde ayarlamaya değer: kötü bir başlangıç tahmini "
        "yeniden oluşturmanın hiç başlamamasına yol açabilir."));
 
+SS_MSG(initial_distortion,
+    EN("Initial distortion (k1,k2,...)"),
+    JA("歪みの初期値（k1,k2,...）"),
+    ZH_HANS("畸变初值（k1,k2,...）"),
+    ZH_HANT("畸變初值（k1,k2,...）"),
+    KO("왜곡 초기값(k1,k2,...)"),
+    DE("Anfangsverzeichnung (k1,k2,...)"),
+    FR("Distorsion initiale (k1,k2,...)"),
+    ES("Distorsión inicial (k1,k2,...)"),
+    PT("Distorção inicial (k1,k2,...)"),
+    IT("Distorsione iniziale (k1,k2,...)"),
+    NL("Beginvertekening (k1,k2,...)"),
+    RU("Начальная дисторсия (k1,k2,...)"),
+    TR("Başlangıç bozulması (k1,k2,...)"));
+
+SS_MSG(initial_distortion_hint,
+    EN("empty = start at zero"),
+    JA("空欄なら 0 から"),
+    ZH_HANS("留空则从 0 开始"),
+    ZH_HANT("留空則從 0 開始"),
+    KO("비우면 0 에서 시작"),
+    DE("leer = bei null beginnen"),
+    FR("vide = partir de zéro"),
+    ES("vacío = empezar en cero"),
+    PT("vazio = começar do zero"),
+    IT("vuoto = partire da zero"),
+    NL("leeg = bij nul beginnen"),
+    RU("пусто — начать с нуля"),
+    TR("boş = sıfırdan başla"));
+
+SS_MSG(initial_distortion_help,
+    EN("Where the distortion coefficients start, in the order the chosen lens "
+       "model lists them (OpenCV: k1,k2,p1,p2). Empty starts at zero, which is "
+       "right unless the lens is already calibrated. Combine with \"Distortion "
+       "refinement: never\" to hold a known calibration exactly."),
+    JA("歪み係数の開始値を、選んだレンズモデルの並び順で指定します（OpenCV なら "
+       "k1,k2,p1,p2）。空欄なら 0 から始まり、レンズが校正済みでない限りそれが"
+       "適切です。「歪みの最適化: しない」と組み合わせると、既知の校正値をそのまま"
+       "固定できます。"),
+    ZH_HANS("畸变系数的起始值，按所选镜头模型列出的顺序填写（OpenCV 为 "
+            "k1,k2,p1,p2）。留空则从 0 开始；除非镜头已经标定，否则留空就是对的。"
+            "与「畸变优化: 不优化」搭配，可原样固定一组已知标定值。"),
+    ZH_HANT("畸變係數的起始值，按所選鏡頭模型列出的順序填寫（OpenCV 為 "
+            "k1,k2,p1,p2）。留空則從 0 開始；除非鏡頭已經標定，否則留空就是對的。"
+            "與「畸變最佳化: 不最佳化」搭配，可原樣固定一組已知標定值。"),
+    KO("왜곡 계수의 시작값을 선택한 렌즈 모델이 나열하는 순서로 적습니다"
+       "(OpenCV 는 k1,k2,p1,p2). 비우면 0 에서 시작하며, 렌즈가 이미 보정되어 "
+       "있지 않다면 그것이 맞습니다. ‘왜곡 보정 최적화: 하지 않음’과 함께 쓰면 "
+       "알려진 보정값을 그대로 고정할 수 있습니다."),
+    DE("Wo die Verzeichnungskoeffizienten beginnen, in der Reihenfolge des "
+       "gewählten Objektivmodells (OpenCV: k1,k2,p1,p2). Leer beginnt bei null, "
+       "was richtig ist, solange das Objektiv nicht bereits kalibriert ist. "
+       "Zusammen mit „Verzeichnung mitoptimieren: nie“ hält es eine bekannte "
+       "Kalibrierung exakt fest."),
+    FR("Où démarrent les coefficients de distorsion, dans l'ordre où le modèle "
+       "d'objectif choisi les énumère (OpenCV : k1,k2,p1,p2). Vide, ils partent "
+       "de zéro, ce qui convient sauf si l'objectif est déjà calibré. À combiner "
+       "avec « Affinage de la distorsion : jamais » pour figer exactement un "
+       "étalonnage connu."),
+    ES("Dónde empiezan los coeficientes de distorsión, en el orden en que los "
+       "enumera el modelo de óptica elegido (OpenCV: k1,k2,p1,p2). Vacío empieza "
+       "en cero, que es lo correcto salvo que la óptica ya esté calibrada. "
+       "Combínalo con «Refinado de la distorsión: nunca» para fijar exactamente "
+       "una calibración conocida."),
+    PT("Onde os coeficientes de distorção começam, na ordem em que o modelo de "
+       "lente escolhido os lista (OpenCV: k1,k2,p1,p2). Vazio começa do zero, o "
+       "que é o certo a menos que a lente já esteja calibrada. Combine com "
+       "«Refino da distorção: nunca» para fixar exatamente uma calibração "
+       "conhecida."),
+    IT("Da dove partono i coefficienti di distorsione, nell'ordine in cui il "
+       "modello di obiettivo scelto li elenca (OpenCV: k1,k2,p1,p2). Vuoto parte "
+       "da zero, che è giusto a meno che l'obiettivo non sia già calibrato. "
+       "Insieme a «Affinamento della distorsione: mai» blocca esattamente una "
+       "calibrazione nota."),
+    NL("Waar de vertekeningscoëfficiënten beginnen, in de volgorde die het "
+       "gekozen lensmodel aanhoudt (OpenCV: k1,k2,p1,p2). Leeg begint bij nul, "
+       "wat klopt tenzij de lens al gekalibreerd is. Samen met "
+       "\"Vertekening bijstellen: nooit\" houdt het een bekende kalibratie "
+       "precies vast."),
+    RU("С чего начинаются коэффициенты дисторсии, в том порядке, в каком их "
+       "перечисляет выбранная модель объектива (OpenCV: k1,k2,p1,p2). Пустое поле "
+       "начинает с нуля, и это верно, если объектив ещё не откалиброван. Вместе с "
+       "«Уточнение дисторсии: никогда» это точно закрепляет известную калибровку."),
+    TR("Bozulma katsayılarının nereden başlayacağı, seçilen objektif modelinin "
+       "sıraladığı düzende (OpenCV: k1,k2,p1,p2). Boş bırakılırsa sıfırdan "
+       "başlar; objektif zaten kalibre edilmiş değilse doğrusu budur. "
+       "\"Bozulmanın iyileştirilmesi: asla\" ile birlikte bilinen bir "
+       "kalibrasyonu tam olarak sabitler."));
+
+SS_MSG(sfm_distortion_refinement,
+    EN("Distortion refinement"),
+    JA("歪みの最適化"),
+    ZH_HANS("畸变优化"),
+    ZH_HANT("畸變最佳化"),
+    KO("왜곡 보정 최적화"),
+    DE("Verzeichnung mitoptimieren"),
+    FR("Affinage de la distorsion"),
+    ES("Refinado de la distorsión"),
+    PT("Refino da distorção"),
+    IT("Affinamento della distorsione"),
+    NL("Vertekening bijstellen"),
+    RU("Уточнение дисторсии"),
+    TR("Bozulmanın iyileştirilmesi"));
+
+SS_MSG(sfm_distortion_during,
+    EN("During mapping"),
+    JA("マッピング中"),
+    ZH_HANS("建图过程中"),
+    ZH_HANT("建圖過程中"),
+    KO("매핑 중"),
+    DE("Während des Mappings"),
+    FR("Pendant le mapping"),
+    ES("Durante el mapeo"),
+    PT("Durante o mapeamento"),
+    IT("Durante il mapping"),
+    NL("Tijdens het mappen"),
+    RU("Во время реконструкции"),
+    TR("Haritalama sırasında"));
+
+SS_MSG(sfm_distortion_final,
+    EN("Final pass only"),
+    JA("最後の仕上げだけ"),
+    ZH_HANS("只在最后一遍"),
+    ZH_HANT("只在最後一遍"),
+    KO("마지막 단계에서만"),
+    DE("Nur im letzten Durchgang"),
+    FR("Seulement à la passe finale"),
+    ES("Solo en la pasada final"),
+    PT("Só na passagem final"),
+    IT("Solo nella passata finale"),
+    NL("Alleen in de laatste ronde"),
+    RU("Только на финальном проходе"),
+    TR("Yalnızca son geçişte"));
+
+SS_MSG(sfm_distortion_never,
+    EN("Never"),
+    JA("しない"),
+    ZH_HANS("不优化"),
+    ZH_HANT("不最佳化"),
+    KO("하지 않음"),
+    DE("Nie"),
+    FR("Jamais"),
+    ES("Nunca"),
+    PT("Nunca"),
+    IT("Mai"),
+    NL("Nooit"),
+    RU("Никогда"),
+    TR("Asla"));
+
+SS_MSG(sfm_distortion_refinement_help,
+    EN("When the distortion coefficients are fitted. \"Final pass only\" holds "
+       "them at their initial value while the model is built and recovers them "
+       "in one bundle adjustment at the end, which is steadier on a lens with "
+       "little distortion; \"Never\" keeps a calibration you already trust."),
+    JA("歪み係数をいつ当てはめるかです。「最後の仕上げだけ」ならモデルを組む間は"
+       "初期値のまま固定し、最後の 1 回のバンドル調整で求めます。歪みの小さい"
+       "レンズではこちらが安定します。「しない」は、すでに信頼している校正値を"
+       "そのまま保ちます。"),
+    ZH_HANS("何时拟合畸变系数。选「只在最后一遍」时，建图期间保持初值不动，最后用"
+            "一次平差求出；对畸变较小的镜头更稳。「不优化」则保留你已经信任的标定值。"),
+    ZH_HANT("何時擬合畸變係數。選「只在最後一遍」時，建圖期間保持初值不動，最後用"
+            "一次平差求出；對畸變較小的鏡頭更穩。「不最佳化」則保留你已經信任的標定值。"),
+    KO("왜곡 계수를 언제 맞출지입니다. ‘마지막 단계에서만’은 모델을 만드는 동안 "
+       "초기값에 고정해 두고 마지막 번들 조정 한 번으로 구합니다. 왜곡이 작은 "
+       "렌즈에서 더 안정적입니다. ‘하지 않음’은 이미 신뢰하는 보정값을 그대로 "
+       "지킵니다."),
+    DE("Wann die Verzeichnungskoeffizienten angepasst werden. „Nur im letzten "
+       "Durchgang“ hält sie beim Aufbau des Modells auf ihrem Anfangswert und "
+       "bestimmt sie in einem Bündelausgleich am Schluss, was bei einem "
+       "Objektiv mit wenig Verzeichnung ruhiger läuft; „Nie“ behält eine "
+       "Kalibrierung, der Sie bereits trauen."),
+    FR("Quand les coefficients de distorsion sont ajustés. « Seulement à la "
+       "passe finale » les tient à leur valeur de départ pendant la "
+       "construction du modèle et les retrouve en un ajustement à la fin, ce "
+       "qui est plus stable sur un objectif peu distordu ; « Jamais » conserve "
+       "un étalonnage auquel vous vous fiez déjà."),
+    ES("Cuándo se ajustan los coeficientes de distorsión. «Solo en la pasada "
+       "final» los mantiene en su valor inicial mientras se construye el "
+       "modelo y los recupera en un ajuste al final, lo que es más estable en "
+       "una óptica poco distorsionada; «Nunca» conserva una calibración en la "
+       "que ya confías."),
+    PT("Quando os coeficientes de distorção são ajustados. «Só na passagem "
+       "final» mantém-nos no valor inicial enquanto o modelo é construído e "
+       "recupera-os num ajuste no fim, o que é mais estável numa lente com "
+       "pouca distorção; «Nunca» conserva uma calibração em que você já "
+       "confia."),
+    IT("Quando i coefficienti di distorsione vengono adattati. «Solo nella "
+       "passata finale» li tiene al valore iniziale mentre il modello viene "
+       "costruito e li ricava in un bundle adjustment alla fine, il che è più "
+       "stabile su un obiettivo poco distorto; «Mai» conserva una calibrazione "
+       "di cui ci si fida già."),
+    NL("Wanneer de vertekeningscoëfficiënten worden gepast. \"Alleen in de "
+       "laatste ronde\" houdt ze tijdens het opbouwen van het model op hun "
+       "beginwaarde en bepaalt ze in één bundelaanpassing aan het eind, wat "
+       "rustiger verloopt bij een lens met weinig vertekening; \"Nooit\" "
+       "behoudt een kalibratie die u al vertrouwt."),
+    RU("Когда подбираются коэффициенты дисторсии. «Только на финальном проходе» "
+       "держит их на начальном значении, пока строится модель, и находит их "
+       "одним уравниванием в конце — на объективе с малой дисторсией это "
+       "спокойнее; «Никогда» сохраняет калибровку, которой вы уже доверяете."),
+    TR("Bozulma katsayılarının ne zaman oturtulacağı. \"Yalnızca son geçişte\", "
+       "model kurulurken onları başlangıç değerinde tutar ve sonda tek bir "
+       "demet dengelemesiyle bulur; bozulması az bir objektifte bu daha "
+       "kararlıdır. \"Asla\" ise hâlihazırda güvendiğiniz bir kalibrasyonu "
+       "korur."));
+
+SS_MSG(sfm_per_image_intrinsics,
+    EN("Per-image intrinsics at the end"),
+    JA("最後に画像ごとの内部パラメータ"),
+    ZH_HANS("最后改为逐图像内参"),
+    ZH_HANT("最後改為逐影像內參"),
+    KO("마지막에 이미지별 내부 파라미터"),
+    DE("Am Ende innere Orientierung je Bild"),
+    FR("Paramètres internes par image à la fin"),
+    ES("Parámetros internos por imagen al final"),
+    PT("Parâmetros internos por imagem no fim"),
+    IT("Parametri interni per immagine alla fine"),
+    NL("Interne parameters per beeld aan het eind"),
+    RU("В конце — внутренние параметры по кадрам"),
+    TR("Sonda görüntü başına iç parametreler"));
+
+SS_MSG(sfm_per_image_intrinsics_help,
+    EN("Reconstruct with the cameras shared as usual, then run one last bundle "
+       "adjustment in which every image carries its own focal length and "
+       "distortion. It follows a lens that drifted -- a zoom that crept, a "
+       "focus that breathed -- at the cost of a much larger solve."),
+    JA("カメラの共有は通常どおりで再構成し、最後に画像ごとの焦点距離と歪みを"
+       "持たせたバンドル調整を 1 回だけ行います。ズームが動いた、ピント送りで"
+       "画角が変わったといったレンズの変化に追従できますが、解く問題は大きく"
+       "なります。"),
+    ZH_HANS("按常规共享相机完成重建，最后再做一次平差，其中每张图像各自带有焦距和"
+            "畸变。这样能跟上镜头的漂移——变焦发生漂移、对焦引起的取景变化——代价是"
+            "求解规模大得多。"),
+    ZH_HANT("按常規共享相機完成重建，最後再做一次平差，其中每張影像各自帶有焦距和"
+            "畸變。這樣能跟上鏡頭的漂移——變焦發生漂移、對焦引起的取景變化——代價是"
+            "求解規模大得多。"),
+    KO("카메라 공유는 평소대로 두고 재구성한 뒤, 마지막에 이미지마다 자체 초점거리와 "
+       "왜곡을 갖는 번들 조정을 한 번 돌립니다. 줌이 밀리거나 초점에 따라 화각이 "
+       "변하는 렌즈의 흐트러짐을 따라갈 수 있지만, 풀어야 할 문제가 훨씬 커집니다."),
+    DE("Wie gewohnt mit geteilten Kameras rekonstruieren und danach einen "
+       "letzten Bündelausgleich rechnen, in dem jedes Bild eigene Brennweite "
+       "und Verzeichnung trägt. Das folgt einem Objektiv, das sich verstellt "
+       "hat -- ein verrutschter Zoom, ein atmender Fokus -- kostet aber eine "
+       "deutlich größere Lösung."),
+    FR("Reconstruire avec les caméras partagées comme d'habitude, puis lancer "
+       "un dernier ajustement où chaque image porte sa propre focale et sa "
+       "propre distorsion. Cela suit un objectif qui a dérivé -- un zoom qui a "
+       "bougé, une mise au point qui respire -- au prix d'un calcul bien plus "
+       "gros."),
+    ES("Reconstruir con las cámaras compartidas como de costumbre y luego "
+       "hacer un último ajuste en el que cada imagen lleva su propia focal y "
+       "su propia distorsión. Sigue a una óptica que se movió -- un zoom que "
+       "se corrió, un enfoque que respira -- a costa de un cálculo mucho mayor."),
+    PT("Reconstruir com as câmeras compartilhadas como de costume e depois "
+       "rodar um último ajuste em que cada imagem carrega sua própria focal e "
+       "sua própria distorção. Isso acompanha uma lente que derivou -- um zoom "
+       "que se mexeu, um foco que respira -- ao custo de um cálculo bem maior."),
+    IT("Ricostruire con le camere condivise come al solito e poi eseguire un "
+       "ultimo bundle adjustment in cui ogni immagine porta la propria focale "
+       "e la propria distorsione. Segue un obiettivo che è andato alla deriva "
+       "-- uno zoom che si è spostato, un fuoco che respira -- al prezzo di un "
+       "calcolo molto più grande."),
+    NL("Reconstrueer met gedeelde camera's zoals gewoonlijk en draai daarna "
+       "één laatste bundelaanpassing waarin elk beeld zijn eigen "
+       "brandpuntsafstand en vertekening draagt. Dat volgt een lens die is "
+       "weggelopen -- een verschoven zoom, een ademende scherpstelling -- ten "
+       "koste van een veel grotere oplossing."),
+    RU("Реконструировать с общими камерами как обычно, а затем выполнить "
+       "последнее уравнивание, в котором у каждого кадра своё фокусное "
+       "расстояние и своя дисторсия. Это отслеживает уплывший объектив — "
+       "сдвинувшийся зум, дышащий фокус — ценой куда более крупной задачи."),
+    TR("Kameralar her zamanki gibi paylaşılarak yeniden oluşturulur, ardından "
+       "her görüntünün kendi odak uzaklığını ve bozulmasını taşıdığı son bir "
+       "demet dengelemesi çalıştırılır. Kayan bir zum ya da nefes alan bir "
+       "odak gibi savrulmuş bir objektifi izler; bedeli çok daha büyük bir "
+       "çözümdür."));
+
 SS_MSG(max_features_auto,
     EN("Max features per image (0 = auto)"),
     JA("画像あたりの特徴数の上限（0 で自動）"),

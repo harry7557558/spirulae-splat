@@ -111,6 +111,9 @@ struct SfmConfig {
     std::string camera_mode = "folder";
     std::string camera_model = "opencv";
     double focal = 0;
+    // Starting distortion coefficients, "k1,k2,..." in the camera model's BA
+    // order. Empty starts at zero, as COLMAP does.
+    std::string distortion;
     // Whether camera_mode is pinned: set by an explicit --camera-mode, and by
     // the internet preset, which chooses per-image cameras deliberately (D20).
     // Unpinned, buildCameras may still switch a Folder default to Image for a
@@ -119,8 +122,11 @@ struct SfmConfig {
 
     // Stage switches that are not a field of any stage's options.
     bool verify = true;                 // match: geometric verification
-    bool compact_unused_features = false;  // compact stored-match feature rows
+    bool compact_unused_features = true;   // compact stored-match feature rows
     bool final_principal_point = true;  // one PP-free global BA at the end (D51)
+    bool final_extra_params = true;     // ... releasing the distortion too (D72)
+    // One more, after those, with every image on its own intrinsics (D73).
+    bool final_per_image_intrinsics = false;
     // Write the finished model in an upright, centred, unit-sized frame rather
     // than in whatever gauge the seed pair left it in (map/Orient.h).
     bool orient = true;
@@ -244,6 +250,8 @@ struct SfmConfig {
       camera_model)                                                                                \
     F(focal, "focal", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Basic, "camera", 0, 10000000, "",      \
       focal)                                                                                       \
+    F(distortion, "distortion", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "camera", 0, 0,    \
+      "", distortion)                                                                              \
     F(camera.exif_focal, "exif-focal", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "camera",   \
       0, 0, "", exif_focal)                                                                        \
     F(camera.exif_groups, "exif-groups", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "camera", \
@@ -309,6 +317,12 @@ struct SfmConfig {
       "mapper", 0, 0, "", final_principal_point)                                                   \
     F(mapper.pp_min_images, "pp-min-images", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 2,      \
       1000000, "", pp_min_images)                                                                  \
+    F(mapper.refine_extra_params, "refine-extra-params", CMD_AUTO | CMD_MAP, Tier::Advanced,       \
+      "mapper", 0, 0, "", refine_extra_params)                                                     \
+    F(final_extra_params, "final-extra-params", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,   \
+      0, "", final_extra_params)                                                                   \
+    F(final_per_image_intrinsics, "final-per-image-intrinsics", CMD_AUTO | CMD_MAP,                \
+      Tier::Advanced, "mapper", 0, 0, "", final_per_image_intrinsics)                              \
     F(orient, "orient", CMD_AUTO | CMD_MAP | CMD_MERGE, Tier::Advanced, "mapper", 0, 0, "",        \
       orient)                                                                                      \
     F(mapper.min_tri_angle_deg, "min-tri-angle", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,  \

@@ -299,6 +299,10 @@ struct MapperOptions {
     // from refining it *during* reconstruction (D51). `Mapper::polish` is what
     // runs it; the CLI drives that, not the mapper's own loop.
     size_t pp_min_images = 20;   // ... for groups with at least this many images
+    // Let BA move the distortion coefficients during reconstruction. On, as in
+    // COLMAP; off holds them at the camera setup's value -- zero, or what
+    // --distortion gave them -- and leaves them to the finishing pass (D72).
+    bool refine_extra_params = true;
     // Scalar the solver computes in (sfm/ba/README.md "Scalar configs"). "df"
     // is an fp32 pair with a ~49-bit significand, which on hardware whose fp64
     // rate is a small fraction of its fp32 rate -- every consumer card -- can be
@@ -754,38 +758,34 @@ public:
         return true;
     }
 
-    // The same, with the principal point released -- for use once, on a model
-    // that is finished (D51). Held during reconstruction the principal point is
-    // an ill-posed parameter that trades against camera rotation (D50); on a
-    // complete model with many images sharing one set of intrinsics the trade
-    // is pinned down, which is exactly the distinction COLMAP's documentation
-    // draws. Groups with fewer than `pp_min_images` images keep theirs: a group
-    // of one image has nothing to share with, so moving its principal point is
-    // just rotating that camera.
-    Reconstruction polish(const Reconstruction& m) {
-        // Only a single-camera-group model. With two or more groups each one's
-        // principal point drifts its own way and the difference is a real error
-        // in their relative orientation -- on a dual-fisheye rig, whose
-        // inter-lens rotation is a physical constant, that cost 21 points of
-        // AUC (D51). One group has no such difference to get wrong.
+    // One more global bundle adjustment on a *finished* model, with what the
+    // mapper held now released: the principal point (D51) and the distortion
+    // coefficients (D72). See src/sfm/README.md, "The finishing passes".
+    Reconstruction polish(const Reconstruction& m, bool free_pp = true, bool free_extra = false) {
         std::set<uint32_t> groups;
         for (const auto& kv : m.images)
             if (kv.second.registered) groups.insert(kv.second.camera_id);
-        if (groups.size() != 1) {
-            if (opt_.verbose)
-                slog::err(slog::Tag::Map, spirula::i18n::msg::sfm::map_pp_skipped,
-                          {(long long)groups.size()});
-            return m;
-        }
+        // Two groups or more and each principal point drifts its own way; the
+        // difference is a real error in their relative orientation, which on a
+        // dual-fisheye rig cost 21 points of AUC (D51).
+        const bool pp = free_pp && groups.size() == 1;
+        if (free_pp && !pp && opt_.verbose)
+            slog::err(slog::Tag::Map, spirula::i18n::msg::sfm::map_pp_skipped,
+                      {(long long)groups.size()});
+        // Releasing what mapping was already refining is a solve that ends
+        // where it started.
+        const bool extra = free_extra && !opt_.refine_extra_params;
+        if (!pp && !extra) return m;
         ensureSetup();
         resetModel();
         adopt(m);
         rebuildScores();
         std::map<uint32_t, Vec2> before;
         for (const auto& kv : rec_.cameras) before[kv.first] = {kv.second.cx, kv.second.cy};
-        pp_free_ = true;
+        final_.pp = pp;
+        final_.extra = extra;
         globalRefine(true);
-        pp_free_ = false;
+        final_ = FinalRelease{};
         if (opt_.verbose)
             for (const auto& kv : rec_.cameras) {
                 const Vec2& b = before[kv.first];
@@ -795,6 +795,23 @@ public:
                             "[map] camera %u principal point %.1f,%.1f -> %.1f,%.1f (%.1f px)\n",
                             kv.first, b.x, b.y, kv.second.cx, kv.second.cy, d);
             }
+        return snapshotModel();
+    }
+
+    // The same finished model with every image on its own intrinsics (D73).
+    // Sharing a camera is what makes a focal observable while the model is
+    // being built; only a complete one can pay for each frame to depart.
+    Reconstruction perImageIntrinsics(const Reconstruction& m, bool free_extra = true) {
+        if (m.numRegistered() < 2) return m;
+        ensureSetup();
+        resetModel();
+        adopt(m);
+        rebuildScores();
+        if (!splitCamerasPerImage()) return m;
+        final_.extra = free_extra;
+        final_.no_sanitize = true;
+        globalRefine(true);
+        final_ = FinalRelease{};
         return snapshotModel();
     }
 
@@ -1241,7 +1258,8 @@ public:
         bo.verbose = false;
         bo.loss = opt_.ba_loss;
         bo.loss_param = (float)(opt_.ba_loss_param * medianPixelScale());
-        bo.refine_principal_point = opt_.refine_principal_point || pp_free_;
+        bo.refine_principal_point = opt_.refine_principal_point || final_.pp;
+        bo.refine_extra_params = opt_.refine_extra_params || final_.extra;
         bo.pp_min_images = opt_.pp_min_images;
         bo.solver = opt_.ba_solver;
         if (coarse && opt_.ba_growth_rtol > 0) {
@@ -2294,6 +2312,18 @@ private:
         return worst;
     }
 
+    // The distortion the camera setup started this group at: zero, or whatever
+    // --distortion supplied. What a focal trial resets to -- the trials must
+    // discard each other's fitted coefficients, not the user's calibration.
+    void resetExtraParams(Camera& c) const {
+        Camera src;
+        auto it = opt_.initial_cameras.find(c.id);
+        if (it != opt_.initial_cameras.end()) src = it->second;
+        c.k1 = src.k1; c.k2 = src.k2; c.p1 = src.p1; c.p2 = src.p2;
+        c.k3 = src.k3; c.k4 = src.k4; c.k5 = src.k5; c.k6 = src.k6;
+        c.sx1 = src.sx1; c.sy1 = src.sy1;
+    }
+
     struct FocalTrial {
         bool ok = false;
         double focal = 0;
@@ -2314,8 +2344,7 @@ private:
                           double focal, uint32_t cap) {
         for (uint32_t cid : cams) {
             default_cams_[cid].setFocal(focal);
-            default_cams_[cid].k1 = default_cams_[cid].k2 = 0;
-            default_cams_[cid].p1 = default_cams_[cid].p2 = 0;
+            resetExtraParams(default_cams_[cid]);
         }
         resetModel();
         FocalTrial t;
@@ -2470,7 +2499,7 @@ private:
         for (uint32_t cid : cams) {
             Camera fresh = default_cams_.at(cid);
             fresh.setFocal(focal);
-            fresh.k1 = fresh.k2 = fresh.p1 = fresh.p2 = 0;
+            resetExtraParams(fresh);
             default_cams_[cid] = fresh;
         }
         if (std::fabs(focal - probe_focal) > 1e-9) seed_geom_.clear();
@@ -3201,7 +3230,8 @@ private:
             bo.verbose = false;
             bo.loss = opt_.ba_loss;
             bo.loss_param = (float)(opt_.ba_loss_param * medianPixelScale());
-            bo.refine_principal_point = opt_.refine_principal_point || pp_free_;
+            bo.refine_principal_point = opt_.refine_principal_point || final_.pp;
+            bo.refine_extra_params = opt_.refine_extra_params || final_.extra;
             bo.pp_min_images = opt_.pp_min_images;
             // Convergence-adaptive iterations (D38): the first round of a
             // growth refine runs to a loose tolerance -- most refines stop
@@ -3240,7 +3270,7 @@ private:
             // internet image collections; on the only such collection here
             // (1363 images, one camera each) it is the other way round --
             // AUC@10 83.2 with, 68.7 without.
-            sanitizeCameras();
+            if (!final_.no_sanitize) sanitizeCameras();
             int removedObs = 0, removedPts = 0;
             filterPoints(removedObs, removedPts);
             if (opt_.verbose) {
@@ -3622,6 +3652,32 @@ private:
         return (int)drop.size();
     }
 
+    // Give every registered image its own camera, copied from the group it was
+    // in. Returns how many were made; 0 when the images already have one each.
+    size_t splitCamerasPerImage() {
+        std::set<uint32_t> used;
+        size_t registered = 0;
+        uint32_t next = 0;
+        for (const auto& kv : rec_.cameras) next = std::max(next, kv.first);
+        for (const auto& kv : rec_.images)
+            if (kv.second.registered) {
+                used.insert(kv.second.camera_id);
+                registered++;
+            }
+        if (used.size() >= registered) return 0;
+        size_t made = 0;
+        for (auto& kv : rec_.images) {
+            if (!kv.second.registered) continue;
+            Camera c = rec_.cameras.at(kv.second.camera_id);
+            c.id = ++next;
+            rec_.cameras[c.id] = c;
+            default_cams_[c.id] = c;
+            kv.second.camera_id = c.id;
+            made++;
+        }
+        return made;
+    }
+
     // A camera whose registered images all went away starts over from the
     // pristine default: its focal search / BA state was fit to registrations
     // that have been rejected, and a retry must not inherit that.
@@ -3644,7 +3700,14 @@ private:
     MapperOptions opt_;
     std::vector<uint32_t> cam_ids_;   // per image, 1-based camera id
     std::set<uint32_t> focal_known_;  // cameras whose focal is no longer a guess
-    bool pp_free_ = false;            // inside polish(): release the principal point
+    // What a finishing pass frees beyond the mapping-time settings, and what it
+    // skips. Set for the duration of one call; empty everywhere else.
+    struct FinalRelease {
+        bool pp = false;           // the principal point (D51)
+        bool extra = false;        // the distortion coefficients (D72)
+        bool no_sanitize = false;  // per-image intrinsics: no group to clamp to (D73)
+    };
+    FinalRelease final_;
     std::map<uint32_t, Camera> default_cams_;  // pristine per-group defaults
     // Best intrinsics any admitted model has produced for each camera group,
     // with the number of images that constrained them (D45; recordCameras).

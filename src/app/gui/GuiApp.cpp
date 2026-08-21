@@ -3312,6 +3312,25 @@ void GuiApp::draw_sfm_advanced() {
     ui::help_on_hover(dmsg::initial_focal_px_help);
 
     ImGui::SetNextItemWidth(px(260.0f));
+    ui::InputTextWithHint(dmsg::initial_distortion, dmsg::initial_distortion_hint,
+                          &_sfm_job.init_distortion);
+    ui::help_on_hover(dmsg::initial_distortion_help);
+
+    ImGui::SetNextItemWidth(px(260.0f));
+    ui::Combo(dmsg::sfm_distortion_refinement, &_sfm_job.distortion_refine,
+              {&dmsg::sfm_distortion_during, &dmsg::sfm_distortion_final,
+               &dmsg::sfm_distortion_never});
+    ui::help_on_hover(dmsg::sfm_distortion_refinement_help);
+
+    // Per-image cameras already give every image its own intrinsics, so the
+    // pass would have nothing to split.
+    ImGui::BeginDisabled(_sfm_job.camera_mode == 2);
+    ui::Checkbox(dmsg::sfm_per_image_intrinsics,
+                 &_sfm_job.final_per_image_intrinsics);
+    ImGui::EndDisabled();
+    ui::help_on_hover(dmsg::sfm_per_image_intrinsics_help);
+
+    ImGui::SetNextItemWidth(px(260.0f));
     ui::InputInt(dmsg::max_features_auto, &_sfm_job.max_features);
     ui::help_on_hover(dmsg::max_features_auto_help);
     ImGui::SetNextItemWidth(px(260.0f));
