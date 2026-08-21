@@ -211,6 +211,7 @@ std::map<std::string, float> engine_train_step_managed(
         hs.height       = (int)b.height;
         hs.num          = (int)b.num;
         hs.camera_model = camera_model_to_string(b.model);
+        hs.distortion   = camera_distortion_to_string(b.distortion);
         hs.viewmats     = b.viewmats_view;
         hs.intrins      = b.intrins_view;
         hs.dist_coeffs  = b.dist_coeffs_view;

@@ -153,7 +153,9 @@ inline CamDistSpec cam_dist_spec(const std::string& camera_model,
             ok = d == CameraDistortionType::None;
     }
     if (!ok)
-        throw std::runtime_error("Unsupported camera model / distortion tier");
+        throw std::runtime_error(
+            "Unsupported camera model / distortion tier: " + camera_model +
+            " / " + distortion);
     return {(uint32_t)m, (uint32_t)d};
 }
 

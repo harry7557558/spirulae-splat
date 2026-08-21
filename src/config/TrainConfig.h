@@ -378,7 +378,7 @@ inline bool train_apply_preset(TrainConfig& c, const std::string& name) {
         c.load_depths = true;
         c.load_normals = true;
         c.mask_boundary_offset = -0.025f;
-        c.floater_suppression= "strong";
+        // c.floater_suppression= "strong";
         c.distraction_robustness = "strong";
         c.sh_degree_warmup_every = 0;
         c.long_axis_split_opacity_k = {0.5f, 0.6f, 30000.0f};
@@ -549,5 +549,6 @@ inline void train_resolve_macros(TrainConfig& c,
             strong ? 0.05f : 0.01f);
         put("sh_reg", c.sh_reg, strong ? 0.05f : 0.01f);
         put("max_screen_size", c.max_screen_size, strong ? 0.1f : 0.2f);
+        put("max_screen_size_clip_hardness", c.max_screen_size_clip_hardness, strong ? 1.1f : 1.25f);
     }
 }

@@ -343,10 +343,9 @@ std::map<std::string, float> engine_train_step_warped(
 );
 
 
-// One homogeneous, non-warp sub-batch of a heterogeneous training step. All
-// cameras in a sub-batch share (width, height, camera_model); different
-// sub-batches of the same step may differ. Views point at host buffers that
-// must stay alive for the whole engine_train_step_hetero call.
+// One homogeneous, non-warp sub-batch of a heterogeneous training step: all its
+// cameras share (width, height, camera_model, distortion). The views point at
+// host buffers that must outlive the whole engine_train_step_hetero call.
 struct HeteroSubBatch {
     int width  = 0;
     int height = 0;
