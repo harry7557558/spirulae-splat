@@ -57,7 +57,8 @@ float mcmc_opacity_reg(float opacity, float mcmc_opacity_reg_weight) {
 [ForceInline]
 [Differentiable]
 float mcmc_scale_reg_3dgs(float3 scales, float mcmc_scale_reg_weight) {
-    scales = exp(scales);
+    // scales = exp(scales);  // TODO: make it configurable? standard MCMC applies on post-exp but is not scale invariant
+    mcmc_scale_reg_weight *= 1e-2;  // approximately exp(scales) for Mip-NeRF 360 outdoor scenes
     return mcmc_scale_reg_weight * (scales.x + scales.y + scales.z) / 3.0;
 }
 

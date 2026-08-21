@@ -343,7 +343,8 @@ inline constexpr PresetText kPresetText[] = {
     {"linear-color",      &preset_linear_color,      &preset_linear_color_help},
     {"synthetic",         &preset_synthetic,         &preset_synthetic_help},
     {"meshing",           &preset_meshing,           &preset_meshing_help},
-    {"academic-baseline", &preset_academic_baseline, &preset_academic_baseline_help},
+    // hidden by default, uncomment to enable
+   //  {"academic-baseline", &preset_academic_baseline, &preset_academic_baseline_help},
 };
 inline constexpr size_t kNumPresetText =
     sizeof(kPresetText) / sizeof(kPresetText[0]);

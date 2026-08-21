@@ -357,7 +357,7 @@ inline constexpr TrainPresetInfo kTrainPresets[] = {
     {"linear-color"},
     {"synthetic"},
     {"meshing"},
-    {"academic-baseline"},
+    // {"academic-baseline"},  // hidden by default, uncomment to enable
 };
 
 // Returns false for an unknown preset name.
@@ -378,13 +378,8 @@ inline bool train_apply_preset(TrainConfig& c, const std::string& name) {
         c.load_depths = true;
         c.load_normals = true;
         c.mask_boundary_offset = -0.025f;
-        // Exactly what this preset used to spell out field by field: median
-        // scoring, robust edge-aware placement, quantile 0.75, ssim 0.1.
-        // Naming the macro instead means the options editor shows the level
-        // the preset chose, rather than "off" next to values it moved.
+        c.floater_suppression= "strong";
         c.distraction_robustness = "strong";
-        c.rgb_distortion_reg = 0.1f;
-        c.depth_distortion_reg = 0.01f;
         c.sh_degree_warmup_every = 0;
         c.long_axis_split_opacity_k = {0.5f, 0.6f, 30000.0f};
         c.noise_lr = 10.0f;
@@ -532,16 +527,15 @@ inline void train_resolve_macros(TrainConfig& c,
     // Score the splat-placement error in a way that a person walking through
     // half the photos cannot dominate.
     if (c.distraction_robustness != "off") {
-        put("densify_score_mode", c.densify_score_mode, "median");
-        put("densify_loss_map_mode", c.densify_loss_map_mode,
-            "robust_edge_aware");
-        if (c.distraction_robustness == "mild") {
-            put("densify_robust_edge_aware_quantile",
-                c.densify_robust_edge_aware_quantile, 0.9f);
-        } else {
+        put("densify_loss_map_power", c.densify_loss_map_power, 1.0f);
+        put("densify_score_power", c.densify_score_power, 1.0f);
+        put("ssim_lambda", c.ssim_lambda, 0.1f);
+        if (c.distraction_robustness == "strong") {
+            put("densify_loss_map_mode", c.densify_loss_map_mode,
+                "robust_edge_aware");
             put("densify_robust_edge_aware_quantile",
                 c.densify_robust_edge_aware_quantile, 0.75f);
-            put("ssim_lambda", c.ssim_lambda, 0.1f);
+            put("densify_score_mode", c.densify_score_mode, "median");
         }
     }
 
@@ -554,5 +548,6 @@ inline void train_resolve_macros(TrainConfig& c,
         put("rgb_distortion_reg", c.rgb_distortion_reg,
             strong ? 0.05f : 0.01f);
         put("sh_reg", c.sh_reg, strong ? 0.05f : 0.01f);
+        put("max_screen_size", c.max_screen_size, strong ? 0.1f : 0.2f);
     }
 }
