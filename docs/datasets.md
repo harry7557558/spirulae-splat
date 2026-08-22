@@ -111,7 +111,7 @@ Two paths, both gathering per destination pixel:
   so a destination pixel and its source pixel are the SAME ray: depth (linear or
   ray) and camera-frame normals transfer unchanged and only the sampling
   coordinate moves. None of GtDepthNormalWarp.cu's point-space handling applies.
-- **K > 1** (warp_to_pinhole): the cubemap face ray projects STRAIGHT through
+- **K > 1** (warp_to_pinhole): the face ray projects STRAIGHT through
   the source camera, so the fitted camera is never materialized and the two
   passes cost one kernel and no intermediate image. `RayToPixel<D, kFromSource>`
   is the seam; `kFromSource` is a template argument (a specialization constant
@@ -124,10 +124,47 @@ Two paths, both gathering per destination pixel:
    `train_frame="points"` frame — poses and points exactly as stored. The
    normalized-frame similarity is computed only to obtain the
    `train_frame_scale` scalar.
-2. **`bake_post_split`** → the post-split arrays `engine_setup_data_manager`
-   consumes. This is either an identity (K=1) pass-through, or the cubemap
-   split when `warp_to_pinhole` is enabled: **5 faces** for fisheye/equisolid,
-   **6 faces** for equirectangular.
+2. **`bake_post_split`** (`data/PostSplit.cpp`) → the post-split arrays
+   `engine_setup_data_manager` consumes. This is either an identity (K=1)
+   pass-through, or the split `camhost::plan_split_faces` plans for a wide
+   camera when `warp_to_pinhole` is enabled (`warp_spherical_to_pinhole` for a
+   panorama).
+
+## The split
+
+A wide camera is rendered as pinhole faces, one per frame of a fixed table:
+five around the optical axis for a fisheye (front, +x, +y, -x, -y), the six
+cube faces for a panorama. Every face has the focal a 90-degree face of
+`ceil(sqrt(W*H/K))` pixels would have -- the density of an uncropped split --
+but is **cropped to the rays the lens holds**: the planner rasterizes each
+frame's visibility (a valid projection, by the GPU warp's own fold test, that
+lands inside the image), takes the bounding box, and covers every box with one
+common tile, chosen to minimize the pixel count plus a fixed cost per face. A
+frame that holds only a corner sliver (under 4% of its 90 degrees) is dropped.
+
+The fixed cost is what decides the outcome. A face pays a projection of every
+splat and a sort whatever its size: measured at 0.5 S^2 pixel-equivalents with
+115k splats and 1.2 S^2 with 219k on an RTX 5070 laptop (S the side of a
+90-degree face), and growing with the splat count; the planner charges 0.75
+S^2. So a 180-degree fisheye, or a cropped one like a 108 x 162 degree frame,
+trains on six half-height faces -- the front cut in two and four side bands --
+at 60-66% of the pixels five square faces took (measured 17% faster at 115k
+splats), while a 200-degree lens whose side bands keep 80% of each face stays
+at five square faces: cropping there would save 6% of the pixels for 20% more
+faces. Past that, the lever is skipping fully-masked raster tiles, not the
+layout. All faces of one camera share a size, so a batch stays one tensor and
+the fused projection path still applies.
+
+Each post camera carries its own intrinsics (an off-centre principal point is
+what a crop is) and its frame's rotation, and the GT warp samples through
+exactly that table, so the face that is rendered is the face that was warped.
+Rasterization still runs over a face's masked-out pixels; a lens boundary that
+is not a rectangle leaves some, which the synthesized FOV mask excludes from
+the loss. A lens whose visible rays fit one face is not split at all.
+
+`spirula geometry --check` verifies the planner: every visible ray of each
+test camera must land in a face, and the faces must not exceed the uncropped
+pixel count.
 
 That normalized-frame similarity is where `orientation_method` and
 `center_method` act — and only `up` / `poses` is implemented natively;

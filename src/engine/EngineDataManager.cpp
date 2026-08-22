@@ -38,6 +38,9 @@ void engine_setup_data_manager(
     std::vector<float>        viewmats,
     std::vector<float>        intrins,
     std::vector<float>        dist_coeffs,
+    std::vector<int32_t>      post_widths,
+    std::vector<int32_t>      post_heights,
+    std::vector<float>        face_axes,
     std::vector<float>        input_intrins,
     std::vector<float>        input_dist_coeffs,
     std::vector<int32_t>      redistort_models,
@@ -57,6 +60,8 @@ void engine_setup_data_manager(
         std::move(K_per_camera),     std::move(post_offsets),
         std::move(viewmats),         std::move(intrins),
         std::move(dist_coeffs),
+        std::move(post_widths),      std::move(post_heights),
+        std::move(face_axes),
         std::move(input_intrins),    std::move(input_dist_coeffs),
         std::move(redistort_models), std::move(redistort_params),
         std::move(train_indices),    std::move(val_indices));
@@ -183,7 +188,7 @@ std::map<std::string, float> engine_train_step_managed(
             b.mask_height, b.mask_width,
             b.depth_view, b.depth_height, b.depth_width,
             b.normal_view, b.normal_height, b.normal_width,
-            (uint64_t)b.axes_dev,
+            b.face_axes_view,
             bilagrid_cam_indices,
             cfg);
     }
@@ -279,7 +284,7 @@ static void _install_and_forward(const DecodedBatch& b, std::string primitive,
             input_depth_is_ray_depth,
             b.input_intrins_view, b.input_dist_coeffs_view,
             b.input_source_models_view, b.input_source_params_view,
-            (uint64_t)b.axes_dev);
+            b.face_axes_view);
     }
 
     forward_3dgs(std::move(primitive), sh_degree, packed,

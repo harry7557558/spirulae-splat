@@ -416,7 +416,7 @@ void GeometryPanel::start_job(const GeometryJob& settings) {
             if (just_loaded) {
                 warp.sampleFace(0, rgb.data(), face_rgb);
                 app::GeometryRequest warm =
-                    face_request(warp, settings.num_tokens);
+                    face_request(warp, 0, settings.num_tokens);
                 warm.want_normal = false;
                 j.pred.predict(face_rgb.data(), warm);
                 if (_cancel.load()) return;
@@ -429,7 +429,11 @@ void GeometryPanel::start_job(const GeometryJob& settings) {
                 // RUN writes, and a pane that appears without another forward
                 // pass is worth the decoder head.
                 app::GeometryPrediction p = j.pred.predict(
-                    face_rgb.data(), face_request(warp, settings.num_tokens));
+                    face_rgb.data(), face_request(warp, k, settings.num_tokens));
+                // One unit across faces before they are blended: Metric3D's
+                // depth is canonical to the face's focal.
+                const float mm = (float)j.pred.depthToMillimetres(warp.faceFocal(k));
+                for (float& d : p.depth) d *= mm;
                 face_depth.push_back(std::move(p.depth));
                 face_normal.push_back(std::move(p.normal));
             }

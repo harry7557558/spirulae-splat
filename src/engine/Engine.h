@@ -84,13 +84,9 @@ void set_training_data(
 );
 
 
-// Warp-fused GT upload used by engine_train_step_managed when the current
-// batch needs fisheye / equirectangular -> pinhole splitting. The GT RGB
-// (and optionally mask / depth / normal) byte buffer is warped on GPU
-// directly into a post-split float buffer; no full-res float intermediate is
-// allocated. Throws when PPISP is enabled. Depth is warped to per-face ray
-// depth; normal is rotated into each face's camera frame. Pass null
-// gt_depth / gt_normal to disable those.
+// Warp-fused GT upload for a fisheye / equirectangular -> pinhole split: the
+// byte GT is warped on GPU straight into post-split float buffers, through
+// the camera table set_camera_params installed (call it FIRST).
 void set_training_data_warped(
     std::string  input_model_name,    // "FISHEYE" / "EQUISOLID" / "EQUIRECTANGULAR"
     std::string  input_distortion,
@@ -108,7 +104,7 @@ void set_training_data_warped(
     TorchTensorView input_dist_coeffs,// [B_in, 8] float
     TorchTensorView input_source_models,  // [B_in] int32 (nullable)
     TorchTensorView input_source_params,  // [B_in, 16] float
-    uint64_t axes_dev                 // device float ptr [K, 3, 3]
+    TorchTensorView face_axes         // [B_in*K, 3, 3] float (host or device)
 );
 
 // --- Forward ---
@@ -333,7 +329,7 @@ std::map<std::string, float> engine_train_step_warped(
     int depth_in_H, int depth_in_W,
     TorchTensorView gt_normal_byte,
     int normal_in_H, int normal_in_W,
-    uint64_t axes_dev,
+    TorchTensorView face_axes,
     TorchTensorView bilagrid_cam_indices,
     const EngineStepConfig& cfg
 );
@@ -409,6 +405,11 @@ void engine_setup_data_manager(
     std::vector<float>        viewmats,
     std::vector<float>        intrins,
     std::vector<float>        dist_coeffs,
+    // POST-split face size and frame (PostSplitCameras::post_widths /
+    // post_heights / face_axes); empty when the warp path is off.
+    std::vector<int32_t>      post_widths,
+    std::vector<int32_t>      post_heights,
+    std::vector<float>        face_axes,
     // Per-INPUT intrins / dist_coeffs (length N). Required for the wide
     // warp kernel (fisheye / equisolid); pass empty when no fisheye-warp
     // camera is in the dataset.

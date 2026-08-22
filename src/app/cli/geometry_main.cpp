@@ -211,12 +211,13 @@ int self_check() {
             fd.assign((size_t)warp.faces(), {});
             fn.assign((size_t)warp.faces(), {});
             for (int k = 0; k < warp.faces(); ++k) {
-                fd[k].assign((size_t)warp.faceWidth() * warp.faceHeight(), 0.0f);
+                const int fw = warp.faceWidth(k), fh = warp.faceHeight(k);
+                fd[k].assign((size_t)fw * fh, 0.0f);
                 fn[k].assign(fd[k].size() * 3, 0.0f);
-                for (int y = 0; y < warp.faceHeight(); ++y)
-                    for (int x = 0; x < warp.faceWidth(); ++x) {
-                        const double tx = -1.0 + 2.0 * (x + 0.5) / warp.faceWidth();
-                        const double ty = -1.0 + 2.0 * (y + 0.5) / warp.faceHeight();
+                for (int y = 0; y < fh; ++y)
+                    for (int x = 0; x < fw; ++x) {
+                        const double tx = -1.0 + 2.0 * (x + 0.5) / fw;
+                        const double ty = -1.0 + 2.0 * (y + 0.5) / fh;
                         double r[3], ax[3], ay[3], az[3];
                         if (axes) {
                             const double* a = axes + (size_t)k * 9;
@@ -245,10 +246,11 @@ int self_check() {
                             az[0]=0; az[1]=0; az[2]=1;
                         }
                         const double dot = nn3[0]*r[0] + nn3[1]*r[1] + nn3[2]*r[2];
-                        const size_t i = (size_t)y * warp.faceWidth() + x;
+                        const size_t i = (size_t)y * fw + x;
                         // The plane at face z-depth t, where the face's own z
-                        // is r . az and r was built with r . az == 1.
-                        fd[k][i] = (float)(dist_to_plane / std::fmax(dot, 0.05));
+                        // is r . az and r was built with r . az == 1; a ray
+                        // that grazes or misses it has no depth, as a mask says.
+                        fd[k][i] = dot > 0.05 ? (float)(dist_to_plane / dot) : 0.0f;
                         fn[k][i * 3 + 0] =
                             (float)(nn3[0]*ax[0] + nn3[1]*ax[1] + nn3[2]*ax[2]);
                         fn[k][i * 3 + 1] =
@@ -301,7 +303,7 @@ int self_check() {
             // free, so this measures the ratio's SPREAD, not the ratio.
             if (!warp.split()) continue;
             for (int k = 0; k < warp.faces(); ++k) {
-                const float s = (float)std::exp(0.25 * (k - warp.faces() * 0.5));
+                const float s = (float)std::exp(0.5 * ((k % 4) - 1.5));
                 for (float& v : fd[(size_t)k]) v *= s;
             }
             std::vector<float> misfit;
@@ -372,6 +374,66 @@ int self_check() {
         if (!ok) ++failures;
         std::printf("  %s %-30s coverage %.4f  (counted %.4f)  %s\n",
                     ok ? "ok  " : "FAIL", c.name, got, want, verdict);
+    }
+
+    // The trainer's split: every ray the lens holds must land in a face, and
+    // the faces should hold fewer pixels than the uncropped split they replace.
+    std::printf("\n  trainer split (camhost::plan_split_faces)\n");
+    for (const Case& c : cases) {
+        if (c.model == (int)CameraModelType::PINHOLE) continue;
+        camhost::Camera hc;
+        hc.model = c.model; hc.tier = c.tier;
+        hc.width = c.w; hc.height = c.h;
+        hc.fx = c.fx; hc.fy = c.fy; hc.cx = c.cx; hc.cy = c.cy;
+        std::copy(std::begin(c.dist), std::end(c.dist), std::begin(hc.dist));
+        const std::vector<camhost::SplitFace> faces = camhost::plan_split_faces(hc);
+        const bool equi = c.model == (int)CameraModelType::EQUIRECTANGULAR;
+        const double* table = equi ? camhost::equirect_face_axes()
+                                   : camhost::fisheye_face_axes();
+        const int K = equi ? 6 : 5;
+        const int S = 2 * (((int)std::ceil(std::sqrt((double)c.w * c.h / K)) + 1) / 2);
+        int64_t seen = 0, missed = 0;
+        for (int y = 0; y < 256; ++y)
+            for (int x = 0; x < 256; ++x) {
+                const double px = (x + 0.5) / 256 * c.w, py = (y + 0.5) / 256 * c.h;
+                double r[3], back[2];
+                const double fx = equi ? c.w / 6.28318530718 : hc.fx;
+                const double fy = equi ? fx : hc.fy;
+                const double cx = equi ? c.w * 0.5 : hc.cx;
+                const double cy = equi ? c.h * 0.5 : hc.cy;
+                if (!camhost::generate_ray((px - cx) / fx, (py - cy) / fy,
+                                           c.model, c.tier, c.dist, r))
+                    continue;
+                if (!camhost::ray_in_frame(hc, r, back)) continue;
+                ++seen;
+                bool hit = false;
+                for (const camhost::SplitFace& f : faces) {
+                    const double* a = table + 9 * f.face;
+                    const double z = a[6]*r[0] + a[7]*r[1] + a[8]*r[2];
+                    if (z <= 1e-12) continue;
+                    const double u = (a[0]*r[0] + a[1]*r[1] + a[2]*r[2]) / z;
+                    const double v = (a[3]*r[0] + a[4]*r[1] + a[5]*r[2]) / z;
+                    const double fpx = u * f.fx + f.cx, fpy = v * f.fy + f.cy;
+                    if (fpx >= 0 && fpx <= f.width && fpy >= 0 && fpy <= f.height) {
+                        hit = true;
+                        break;
+                    }
+                }
+                if (!hit) ++missed;
+            }
+        double px = 0;
+        for (const camhost::SplitFace& f : faces) px += (double)f.width * f.height;
+        const double uncropped = (double)K * S * S;
+        // Rays at the very rim round either way; anything more is a hole. A
+        // lens seen past 135 degrees earns a back face, never more than a cube.
+        const bool ok = seen > 0 && missed <= seen / 500 + 1 && px <= 6.0 * S * S + 1;
+        if (!ok) ++failures;
+        std::printf("  %s %-30s faces %d of %dx%d  pixels %.0f%% of uncropped"
+                    "  uncovered %lld / %lld\n",
+                    ok ? "ok  " : "FAIL", c.name, (int)faces.size(),
+                    faces.empty() ? 0 : faces[0].width,
+                    faces.empty() ? 0 : faces[0].height,
+                    100.0 * px / uncropped, (long long)missed, (long long)seen);
     }
 
     std::printf("\n%s\n", failures ? "FAILURES" : "camera round trip is exact");
@@ -533,18 +595,24 @@ int spirula_geometry_main(int argc, char** argv) {
 
             const char* model_name = camera_model_to_string(
                 (CameraModelType)cam.model);
+            // The faces differ in size; the largest is the one the cost is.
+            int fw = 0, fh = 0;
+            for (int k = 0; k < warps[g].faces(); ++k)
+                if ((int64_t)warps[g].faceWidth(k) * warps[g].faceHeight(k) >
+                    (int64_t)fw * fh) {
+                    fw = warps[g].faceWidth(k);
+                    fh = warps[g].faceHeight(k);
+                }
             if (warps[g].split())
                 std::printf("  %s\n", format(G::log_camera_split,
                                              {(long long)g, model_name,
                                               (long long)warps[g].faces(),
-                                              (long long)warps[g].faceWidth(),
-                                              (long long)warps[g].faceHeight()})
+                                              (long long)fw, (long long)fh})
                                           .c_str());
             else
                 std::printf("  %s\n", format(G::log_camera_single,
                                              {(long long)g, model_name,
-                                              (long long)warps[g].faceWidth(),
-                                              (long long)warps[g].faceHeight()})
+                                              (long long)fw, (long long)fh})
                                           .c_str());
         }
 
@@ -605,13 +673,17 @@ int spirula_geometry_main(int argc, char** argv) {
             std::vector<float> face_rgb;
             for (int k = 0; k < warp.faces(); ++k) {
                 warp.sampleFace(k, src.data(), face_rgb);
-                app::GeometryRequest rq = app::face_request(warp, o.num_tokens);
+                app::GeometryRequest rq = app::face_request(warp, k, o.num_tokens);
                 rq.want_depth = need_depth;
                 rq.want_normal = need_normal;
                 app::GeometryPrediction p = pred.predict(face_rgb.data(), rq);
-                NN_CHECK(p.width == warp.faceWidth() && p.height == warp.faceHeight(),
+                NN_CHECK(p.width == warp.faceWidth(k) && p.height == warp.faceHeight(k),
                          "the network returned %dx%d for a %dx%d face", p.width,
-                         p.height, warp.faceWidth(), warp.faceHeight());
+                         p.height, warp.faceWidth(k), warp.faceHeight(k));
+                // Millimetres on every face before they are blended: Metric3D's
+                // depth is canonical to the face's own focal.
+                const float mm = (float)pred.depthToMillimetres(warp.faceFocal(k));
+                for (float& d : p.depth) d *= mm;
                 face_depth.push_back(std::move(p.depth));
                 face_normal.push_back(std::move(p.normal));
             }
@@ -653,9 +725,7 @@ int spirula_geometry_main(int argc, char** argv) {
             if (need_depth) {
                 // 0 is the trainer's "no ground truth here", so a covered pixel
                 // never rounds into it.
-                const float inv =
-                    o.depth_mm ? (float)pred.depthToMillimetres(warp.faceFocal())
-                               : 1.0f / depth_scale(depth);
+                const float inv = o.depth_mm ? 1.0f : 1.0f / depth_scale(depth);
                 app::WriteJob job;
                 job.path = dp.string();
                 job.depth_w = warp.outWidth();

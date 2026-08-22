@@ -32,35 +32,62 @@ uint8_t to_byte(float v) {
     return (uint8_t)(std::min(std::max(v, 0.0f), 1.0f) * 255.0f + 0.5f);
 }
 
-// A split image's views are drawn as one picture, so the zoom moves over all
-// of them at once instead of paging between them.
-//
-// Where each one goes, and how far it has to be turned to sit flush against
-// its neighbours. The views are cubemap faces in the order of
-// DataManager.cpp's kAxesFisheye5 / kAxesEquirect6 -- 0 front, 1 right,
-// 2 down, 3 left, 4 up, and for the 6-face table 5 back -- so unfolding them
-// as a cross is what makes the seams meet: five of the twelve cube edges
-// join, which is as many as any flat unfolding can. The two tables differ in
-// the right face's roll, which is why one turns and the other does not.
-//
-// This is LAYOUT only. The texture behind it packs the views tightly (see
-// pack_rgb), and the cross's empty cells cost nothing: draw_pane places each
-// view from the packed texture on its own quad.
-const FaceCell kCross5[5] = {
-    {1, 1, 0}, {2, 1, 1}, {1, 2, 2}, {0, 1, 3}, {1, 0, 0},
+// A split image's views are drawn as one picture, unfolded as a cross (five
+// of the twelve cube edges join, as many as any flat unfolding can): per frame
+// of camhost::*_face_axes, its cell and the quarter turns that seat its roll.
+struct CrossCell { int col, row, turns; };
+const CrossCell kCrossFisheye[6] = {
+    {1, 1, 0}, {2, 1, 1}, {1, 2, 2}, {0, 1, 3}, {1, 0, 0}, {3, 1, 2},
 };
-const FaceCell kCross6[6] = {
-    {1, 1, 0}, {2, 1, 0}, {1, 2, 2}, {0, 1, 3}, {1, 0, 0}, {3, 1, 2},
+const CrossCell kCrossEquirect[6] = {
+    {1, 1, 0}, {2, 1, 0}, {1, 2, 2}, {0, 1, 0}, {1, 0, 0}, {3, 1, 0},
 };
 
-void face_layout(int views, std::vector<FaceCell>& cells, int& cols, int& rows) {
-    if (views == 5) { cells.assign(kCross5, kCross5 + 5); cols = 3; rows = 3; return; }
-    if (views == 6) { cells.assign(kCross6, kCross6 + 6); cols = 4; rows = 3; return; }
-    views = std::max(views, 1);
-    cols = (int)std::ceil(std::sqrt((double)views));
-    rows = (views + cols - 1) / cols;
+// The views of image `index` on the canvas: a crop's place inside its frame's
+// cell comes straight from its intrinsics, so the seams meet to the pixel.
+void face_layout(const PostSplitCameras& post, int model, int index, int views,
+                 int vw, int vh, std::vector<FaceCell>& cells, int& cw, int& ch) {
     cells.clear();
-    for (int v = 0; v < views; v++) cells.push_back({v % cols, v / cols, 0});
+    const bool split = views > 1 && !post.K_per_camera.empty() &&
+                       index < (int)post.K_per_camera.size() &&
+                       post.K_per_camera[(size_t)index] == views;
+    if (!split) {
+        const int cols = (int)std::ceil(std::sqrt((double)std::max(views, 1)));
+        const int rows = (std::max(views, 1) + cols - 1) / cols;
+        for (int v = 0; v < views; v++)
+            cells.push_back({(float)(v % cols * vw), (float)(v / cols * vh),
+                             (float)vw, (float)vh, 0});
+        cw = cols * vw;
+        ch = rows * vh;
+        return;
+    }
+    const bool equi = model == (int)CameraModelType::EQUIRECTANGULAR;
+    const CrossCell* cross = equi ? kCrossEquirect : kCrossFisheye;
+    const int off = post.post_offsets[(size_t)index];
+    // Every face of a camera shares a focal, and a frame spans -1..1.
+    const float f = post.intrins[(size_t)off * 4];
+    const float side = 2.0f * f;
+    for (int v = 0; v < views; v++) {
+        const size_t p = (size_t)(off + v);
+        const int face = std::clamp(post.post_faces[p], 0, 5);
+        const float fx = post.intrins[p * 4 + 0], fy = post.intrins[p * 4 + 1];
+        const float cx = post.intrins[p * 4 + 2], cy = post.intrins[p * 4 + 3];
+        const float w = (float)post.post_widths[p], h = (float)post.post_heights[p];
+        // The crop's corners inside its cell, then turned about the centre.
+        float x0 = (-cx / fx + 1.0f) * f, x1 = ((w - cx) / fx + 1.0f) * f;
+        float y0 = (-cy / fy + 1.0f) * f, y1 = ((h - cy) / fy + 1.0f) * f;
+        for (int t = 0; t < (cross[face].turns & 3); t++) {
+            const float nx0 = side - y1, nx1 = side - y0;
+            y0 = x0; y1 = x1;
+            x0 = nx0; x1 = nx1;
+        }
+        cells.push_back({cross[face].col * side + x0, cross[face].row * side + y0,
+                         x1 - x0, y1 - y0, cross[face].turns});
+    }
+    int cols = 3;
+    for (const FaceCell& c : cells) cols = std::max(cols, (int)std::ceil((c.x + c.w) / side));
+    cw = (int)std::lround(cols * side);
+    ch = (int)std::lround(3 * side);
 }
 
 // The packed grid: square-ish, and every cell used.
@@ -404,7 +431,8 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
     out.views = (int)B;
     out.view_w = (int)W;
     out.view_h = (int)H;
-    face_layout(out.views, out.cells, out.lay_cols, out.lay_rows);
+    face_layout(s.post, s.ds.camera_models[(size_t)j.index], j.index, out.views,
+                out.view_w, out.view_h, out.cells, out.canvas_w, out.canvas_h);
     pack_shape(out.views, out.pack_cols, out.pack_rows);
     pack_rgb(gt.data(), out.views, (int)H, (int)W, (int)C,
              out.pack_cols, out.pack_rows, out.gt);
@@ -565,13 +593,13 @@ void ImageCompare::rebuild_textures() {
             p.view_h = _shot.view_h;
             p.pack_cols = _shot.pack_cols;
             p.cells = _shot.cells;
-            p.canvas_w = _shot.lay_cols * _shot.view_w;
-            p.canvas_h = _shot.lay_rows * _shot.view_h;
+            p.canvas_w = _shot.canvas_w;
+            p.canvas_h = _shot.canvas_h;
         } else {
             p.view_w = w;
             p.view_h = h;
             p.pack_cols = 1;
-            p.cells.assign(1, FaceCell{0, 0, 0});
+            p.cells.assign(1, FaceCell{0.0f, 0.0f, (float)w, (float)h, 0});
             p.canvas_w = w;
             p.canvas_h = h;
         }
@@ -604,7 +632,7 @@ int ImageCompare::faces() const {
 }
 
 bool ImageCompare::has_masks() const {
-    return !_session->ds.mask_filenames.empty() || _session->post.any_fisheye_warp;
+    return !_session->ds.mask_filenames.empty() || _session->post.any_fov_mask;
 }
 
 void ImageCompare::select(int index) {
@@ -836,13 +864,12 @@ void ImageCompare::draw_pane(const Pane& p, const ImVec2& box,
         const ImVec2 org = ImGui::GetCursorScreenPos();
         ImGui::Dummy(ImVec2(vw, vh));
 
-        // Canvas origin in screen space, and one cell's size there. Each view
-        // is drawn straight from its slot in the packed texture onto its own
-        // quad, so the cells the cross leaves empty simply are not drawn.
+        // Canvas origin in screen space, and canvas pixels to screen. Each
+        // view is drawn straight from its slot in the packed texture onto its
+        // own quad, so the cells the cross leaves empty simply are not drawn.
         const float ox = org.x - (_cx - fu * 0.5f) * disp_w;
         const float oy = org.y - (_cy - fv * 0.5f) * disp_h;
-        const float cw = (float)p.view_w * fit * _zoom;
-        const float ch = (float)p.view_h * fit * _zoom;
+        const float sc = fit * _zoom;
         // Half a texel in from each edge: adjacent cells come from slots that
         // are NOT adjacent in the texture, and linear filtering at the seam
         // would otherwise blend in whichever face happens to be packed next.
@@ -863,8 +890,8 @@ void ImageCompare::draw_pane(const Pane& p, const ImVec2& box,
         if (point) dl->AddCallback(pio.DrawCallback_SetSamplerNearest, nullptr);
         for (size_t v = 0; v < p.cells.size(); v++) {
             const FaceCell& fc = p.cells[v];
-            const float x0 = ox + fc.col * cw, x1 = x0 + cw;
-            const float y0 = oy + fc.row * ch, y1 = y0 + ch;
+            const float x0 = ox + fc.x * sc, x1 = x0 + fc.w * sc;
+            const float y0 = oy + fc.y * sc, y1 = y0 + fc.h * sc;
             if (x1 < org.x || x0 > org.x + vw || y1 < org.y || y0 > org.y + vh)
                 continue;
             const int pc = (int)v % p.pack_cols, pr = (int)v / p.pack_cols;

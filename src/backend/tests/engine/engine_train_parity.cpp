@@ -79,8 +79,8 @@ static void push_losses(const std::map<std::string, float>& m) {
     for (const auto& kv : m) g_loose.push_back(kv.second);
 }
 
-// [K, 3, 3] face axes (see warp_parity.cpp).
-static std::vector<float> make_axes(int K, float s) {
+// [K, 3, 3] unit face frames (see warp_parity.cpp).
+static std::vector<float> make_axes(int K) {
     struct V3 { float x, y, z; };
     auto norm3 = [](V3 a) {
         float l = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
@@ -98,8 +98,7 @@ static std::vector<float> make_axes(int K, float s) {
         V3 up = std::fabs(z.y) > 0.9f ? V3{0, 0, 1} : V3{0, 1, 0};
         V3 x = norm3(cross3(up, z));
         V3 y = cross3(z, x);
-        float row[9] = {s * x.x, s * x.y, s * x.z, s * y.x, s * y.y,
-                        s * y.z, z.x,     z.y,     z.z};
+        float row[9] = {x.x, x.y, x.z, y.x, y.y, y.z, z.x, z.y, z.z};
         axes.insert(axes.end(), row, row + 9);
     }
     return axes;
@@ -209,12 +208,10 @@ int main(int argc, char** argv) {
 
     // --- warped steps (fisheye wide + equirectangular) ---------------------
     const int K = 2, out_W = 32, out_H = 32;
-    std::vector<float> axes = make_axes(K, 0.7f);
-    float* d_axes = (float*)backend::device_malloc(axes.size() * 4);
-    backend::memcpy_sync(d_axes, axes.data(), axes.size() * 4,
-                         MemcpyKind::HostToDevice);
+    std::vector<float> axes = make_axes(K);
 
-    // Post-split pinhole cameras: face fov matches the axes scale.
+    // Post-split pinhole cameras: the warp samples each face through this
+    // very table, so an off-centre crop here is an off-centre crop there.
     const int B_post = K;  // B_in = 1
     std::vector<float> post_vm = {
         1, 0, 0, 0,   0, 1, 0, 0,   0, 0, 1, 3.0f,  0, 0, 0, 1,
@@ -224,8 +221,8 @@ int main(int argc, char** argv) {
     for (int k = 0; k < B_post; k++) {
         post_intr.push_back(0.5f * out_W / 0.7f);
         post_intr.push_back(0.5f * out_H / 0.7f);
-        post_intr.push_back(0.5f * out_W);
-        post_intr.push_back(0.5f * out_H);
+        post_intr.push_back(0.5f * out_W + 4.0f * k);
+        post_intr.push_back(0.5f * out_H - 3.0f * k);
     }
     // engine_train_step_warped always sets the post-split table to
     // PINHOLE / NONE.
@@ -271,7 +268,8 @@ int main(int argc, char** argv) {
                 ttv(gt_depth.data(), 2, {1, wc.in_H, wc.in_W, 1}),
                 wc.in_H, wc.in_W,
                 ttv(gt_normal.data(), 1, {1, wc.in_H, wc.in_W, 3}),
-                wc.in_H, wc.in_W, (uint64_t)d_axes, ttv_null(), cfg);
+                wc.in_H, wc.in_W, ttv(axes.data(), 4, {K, 3, 3}),
+                ttv_null(), cfg);
             push_losses(losses);
         }
     }
