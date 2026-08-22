@@ -207,7 +207,7 @@ int main(int argc, char** argv) {
     }
 
     // --- warped steps (fisheye wide + equirectangular) ---------------------
-    const int K = 2, out_W = 32, out_H = 32;
+    const int K = 2, out_W = 64, out_H = 64;
     std::vector<float> axes = make_axes(K);
 
     // Post-split pinhole cameras: the warp samples each face through this
@@ -248,10 +248,22 @@ int main(int argc, char** argv) {
         auto gt_rgb = r.bytes((int64_t)wc.in_H * wc.in_W * 3);
         auto gt_alpha = r.bytes((int64_t)wc.in_H * wc.in_W);
         for (auto& v : gt_alpha) v = v < 220 ? 1 : 0;
+        // A solid dead band, not just speckle: whole tiles have to die for the
+        // skip path to differ from rendering everything.
+        for (int y = 0; y < wc.in_H; y++)
+            for (int x = 0; x < wc.in_W / 2; x++) gt_alpha[(int64_t)y * wc.in_W + x] = 0;
         auto gt_depth = r.words((int64_t)wc.in_H * wc.in_W, 12);
         auto gt_normal = r.bytes((int64_t)wc.in_H * wc.in_W * 3);
 
-        for (int s = 0; s < 2; s++, step++) {
+        // Steps 2-3 drop alpha supervision, which is what lets the engine
+        // leave fully-masked tiles unrendered; SS_NO_TILE_SKIP=1 renders them
+        // and must land in the same place.
+        for (int s = 0; s < 4; s++, step++) {
+            EngineStepConfig cfg_s = cfg;
+            if (s >= 2) {
+                cfg_s.loss.weights[(int)LossWeightIndex::AlphaSup] = 0.0f;
+                cfg_s.loss.weights[(int)LossWeightIndex::AlphaSupUnder] = 0.0f;
+            }
             auto losses = engine_train_step_warped(
                 step, max_steps, "3dgs", 3, /*packed=*/false, out_W, out_H,
                 ttv(post_vm.data(), 4, {B_post, 4, 4}),
@@ -269,7 +281,7 @@ int main(int argc, char** argv) {
                 wc.in_H, wc.in_W,
                 ttv(gt_normal.data(), 1, {1, wc.in_H, wc.in_W, 3}),
                 wc.in_H, wc.in_W, ttv(axes.data(), 4, {K, 3, 3}),
-                /*face_passes=*/{}, ttv_null(), cfg);
+                /*face_passes=*/{}, ttv_null(), cfg_s);
             push_losses(losses);
         }
     }

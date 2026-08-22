@@ -241,11 +241,15 @@ void forward_3dgs(
         _dv_tv(engine().camera.intrins),
         (uint32_t)engine().camera.width,
         (uint32_t)engine().camera.height,
-        image_ids_ptr
+        image_ids_ptr,
+        engine().fwd.tile_active.data_ptr()
     );
 
     engine().fwd.tile_offsets = tile_offsets;
     engine().fwd.flatten_ids = flatten_ids;
+    // One shot: whoever wants tiles skipped sets the map immediately before
+    // the forward, so a later preview or viewer render cannot inherit it.
+    engine().fwd.tile_active = DeviceVector<int32_t>();
 
     // --- Rasterization forward ---
     RenderOutput::TensorTuple renders;

@@ -132,6 +132,10 @@ struct ForwardCache {
     std::vector<DeviceTensorFloatND>  splats_s;
     DeviceTensor3D<int32_t>           tile_offsets;
     DeviceVector<int32_t>             flatten_ids;
+    // [C, tile_h, tile_w] of 0/1: tiles no pixel of the loss reads are left
+    // out of the intersections, so the raster gets an empty range for them.
+    // Empty unless a training step asked for it (engine_set_tile_skip_mask).
+    DeviceVector<int32_t>             tile_active;
     DeviceTensor3D<float>             render_Ts;
     DeviceTensor3D<float>             render_median; // [C,H,W] median depth, empty if not requested
     DeviceTensor3D<int32_t>           last_ids;

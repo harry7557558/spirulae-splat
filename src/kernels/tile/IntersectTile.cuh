@@ -12,6 +12,16 @@
 
 
 
+int64_t intersect_tile_count(int width, int height);
+
+
+void compute_tile_active(
+    TorchTensorView mask,   // [I, H_mask, W_mask] bool
+    int I, int width, int height,
+    int32_t* tile_active    // [I, tile_h, tile_w]
+);
+
+
 std::tuple<
     DeviceVector<int64_t>,    // isect_ids [n_isects]
     DeviceVector<int32_t>,    // flatten_ids [n_isects]
@@ -26,5 +36,6 @@ std::tuple<
     TorchTensorView intrins,      // [I, 4]
     const uint32_t image_width,
     const uint32_t image_height,
-    DeviceVector<int32_t>* image_ids  // null for non-packed
+    DeviceVector<int32_t>* image_ids, // null for non-packed
+    const int32_t* tile_active        // [I, tile_h, tile_w]; null = all live
 );

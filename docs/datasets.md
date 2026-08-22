@@ -181,7 +181,8 @@ exactly that table, so the face that is rendered is the face that was warped.
 
 Splitting is per input image, so a face pass renders that image's faces of one
 size; the passes of a step accumulate into the same gradient buffers and one
-optimizer step follows.
+optimizer step follows. A lens whose visible rays fit one face is not split at
+all.
 
 Measured, 3000 steps on an RTX 5070 laptop, gradient already accumulating
 across passes in both columns (`--use-fused-proj-bwd-optim 0 --split-batch 1`):
@@ -197,12 +198,61 @@ So where the passes are already paid for, per-face costs nothing in time and
 returns 4-15% of the VRAM. Where they are not, it costs the fused optimizer:
 the same capture with it available runs 37.2 s / 722 MiB uniform against
 40.9 s / 690 MiB per-face -- 10% slower to save 4% of the memory, which is why
-`auto` leaves it alone there. The remaining waste in both fits is the masked
-part of a face, which the rasterizer still runs; skipping fully-masked tiles
-would take it without splitting anything.
-Rasterization still runs over a face's masked-out pixels; a lens boundary that
-is not a rectangle leaves some, which the synthesized FOV mask excludes from
-the loss. A lens whose visible rays fit one face is not split at all.
+`auto` leaves it alone there. What is left after either fit is the masked part
+of a face, which the next section takes without splitting anything.
+
+### Skipping masked tiles
+
+Cropping a face to its lens leaves the corners of the crop masked out anyway --
+a rectangle cannot follow a circle -- and the rasterizer runs over those pixels
+in both directions. So the intersector leaves them out: a tile every pixel of
+which the mask excludes emits no (tile, splat) pair, which shrinks the sort and
+gives the raster an empty range to render, forward and backward.
+
+This is exact because a masked pixel reaches nothing: the per-pixel terms are
+gated by the mask, the fused SSIM's window statistics are conditional on it,
+and the multi-scale pyramid pools over the unmasked children only. Two terms
+would read a masked pixel -- alpha supervision, which is what "cut out
+background" means -- and where either is on, tiles are not skipped. Nothing is
+skipped for a render with no mask, for the eval split, or for the GUI's compare
+view, all of which render every tile. `SS_TILE_SKIP_LOG=1` reports what a run
+skips and `SS_NO_TILE_SKIP=1` renders everything, which is how the saving was
+measured.
+
+A tile is kept when an unmasked pixel is within ONE pixel of it, not only
+inside it: the depth-to-normal stencil reads its neighbour, so a tile flush
+against the boundary still feeds a live one. At zero margin the warped
+`engine_train_parity` case moves; at one it is bit-identical, which is the
+check that keeps this exact.
+
+Measured, 600 steps on an RTX 5070 laptop, `SS_NO_TILE_SKIP=1` against the
+default:
+
+| capture | tiles skipped | time |
+|---|---|---|
+| 960x960 fisheye, ~200 deg, 5 faces | 44% | 8.9 s -> 8.0 s |
+| 1000x1500 fisheye, 108x162 deg, 6 faces | 25% | 7.8 s -> 7.5 s |
+
+Skipping 44% of the tiles buys 10% of the step, not 44%: projection, the sort,
+the optimizer and the loss are all still paid in full, and the tiles that go
+are the cheap ones -- a masked corner holds few splats.
+
+One statistic is NOT identical, and deliberately so: the densification error
+map is the one consumer that is not mask-gated, so without skipping a splat
+seen only through masked pixels still earns a densify score, and with skipping
+it does not. Gating that map to match costs about 3 dB PSNR here -- densifying
+against the masked neighbourhood evidently helps the pixels that do count --
+so the map stays as it is. Across seven 3000-step runs each the resulting
+difference stayed inside the run-to-run spread (SSIM 0.917 +- 0.010 without
+skipping against 0.905 +- 0.021 with, t = 1.3).
+
+One behaviour follows from this and is worth knowing: the per-pixel
+REGULARIZERS (alpha, normal, distortion) used to apply to masked-out pixels
+while the supervision terms did not. They no longer do -- "ignore" now means
+what the mask option says it means, every per-pixel term and its pixel count
+alike -- which is also what makes an unrendered tile cost nothing. A run
+without a mask is unaffected, bit for bit.
+
 
 `spirula geometry --check` verifies the planner: every visible ray of each
 test camera must land in a face, and the faces must not exceed the uncropped

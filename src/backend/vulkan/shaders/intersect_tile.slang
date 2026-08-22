@@ -9,6 +9,7 @@
 // 128-byte push floor and are pushed directly.
 
 #include "int64_compat.slang"
+#include "int8_compat.slang"
 
 static const int TILE_SIZE_IX = 16;  // TILE_SIZE_X * MACRO_TILE_SIZE_X
 static const int TILE_SIZE_IY = 16;  // TILE_SIZE_Y * MACRO_TILE_SIZE_Y
@@ -37,7 +38,8 @@ float2 ellipse_range_bound(float3 inv_cov, float y0, float y1) {
 // IntersectTile.cu count_ellipse_grid_overlaps.
 int count_ellipse_grid_overlaps(
     float2 xy, float3 inv_cov,
-    int grid_xmin, int grid_xmax, int grid_ymin, int grid_ymax
+    int grid_xmin, int grid_xmax, int grid_ymin, int grid_ymax,
+    int* tile_active, gindex_t tile_base, uint tile_width
 ) {
     int n_tiles = 0;
 
@@ -51,7 +53,13 @@ int count_ellipse_grid_overlaps(
             int x1 = int(ceil((bound.y + xy.x) / TILE_SIZE_IX));
             x0 = clamp(x0, grid_xmin, grid_xmax);
             x1 = clamp(x1, grid_xmin, grid_xmax);
-            n_tiles += max(x1 - x0, 0);
+            if (kSkipTiles == 0) {
+                n_tiles += max(x1 - x0, 0);
+            } else {
+                for (int x = x0; x < x1; x++)
+                    n_tiles += tile_active[tile_base + gindex_t(y) * tile_width +
+                                           gindex_t(x)] != 0 ? 1 : 0;
+            }
         }
     } else {
         inv_cov = float3(inv_cov.z, inv_cov.y, inv_cov.x);
@@ -63,7 +71,13 @@ int count_ellipse_grid_overlaps(
             int y1 = int(ceil((bound.y + xy.y) / TILE_SIZE_IY));
             y0 = clamp(y0, grid_ymin, grid_ymax);
             y1 = clamp(y1, grid_ymin, grid_ymax);
-            n_tiles += max(y1 - y0, 0);
+            if (kSkipTiles == 0) {
+                n_tiles += max(y1 - y0, 0);
+            } else {
+                for (int y = y0; y < y1; y++)
+                    n_tiles += tile_active[tile_base + gindex_t(y) * tile_width +
+                                           gindex_t(x)] != 0 ? 1 : 0;
+            }
         }
     }
 
@@ -93,6 +107,9 @@ struct IsectCountParams {  // 56 bytes: pushed directly
     float* proj_conic;         // [total,3]; null -> AABB mode
     float* proj_opac;          // [total,1]
     i64mem_t* tiles_per_splat;  // [total]
+    int* image_ids;            // [total] (packed) or null (iid = idx / N)
+    int* tile_active;          // [I, tile_h, tile_w] 0/1; read when kSkipTiles
+    uint32_t N;                // splats per image
     uint32_t tile_width;
     uint32_t tile_height;
     uint32_t total;            // I * N (or nnz in packed mode)
@@ -108,6 +125,8 @@ const int kEllipse = 0;  // proj_conic/proj_opac present (ellipse counting)
 const int kHasXy = 0;    // proj_xy present (else AABB center)
 [SpecializationConstant]
 const int kPacked = 0;   // image_ids present (packed projection)
+[SpecializationConstant]
+const int kSkipTiles = 0;  // tile_active present (masked tiles left out)
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -125,6 +144,10 @@ void intersect_tile_count(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint2 tile_min, tile_max;
     tile_range(aabb, p.tile_width, p.tile_height, tile_min, tile_max);
 
+    gindex_t iid = kPacked != 0 ? gindex_t(p.image_ids[idx])
+                                : gindex_t(idx / p.N);
+    gindex_t tile_base = iid * gindex_t(p.tile_width) * gindex_t(p.tile_height);
+
     if (kEllipse != 0) {
         float2 xy = kHasXy != 0
             ? float2(p.proj_xy[2 * idx], p.proj_xy[2 * idx + 1])
@@ -135,11 +158,64 @@ void intersect_tile_count(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         p.tiles_per_splat[idx] = i64mem_make(count_ellipse_grid_overlaps(
             xy, conic,
             int(tile_min.x), int(tile_max.x), int(tile_min.y),
-            int(tile_max.y)));
-    } else {
+            int(tile_max.y), p.tile_active, tile_base, p.tile_width));
+    } else if (kSkipTiles == 0) {
         p.tiles_per_splat[idx] = i64mem_make(max(
             int(tile_max.y - tile_min.y) * int(tile_max.x - tile_min.x), 0));
+    } else {
+        int n = 0;
+        for (uint i = tile_min.y; i < tile_max.y; ++i)
+            for (uint j = tile_min.x; j < tile_max.x; ++j)
+                n += p.tile_active[tile_base + gindex_t(i) * p.tile_width +
+                                   gindex_t(j)] != 0 ? 1 : 0;
+        p.tiles_per_splat[idx] = i64mem_make(n);
     }
+}
+
+// The depth -> normal stencil reads one pixel past its own; IntersectTile.cu
+// kMaskPad.
+static const int kMaskPad = 1;
+
+// One thread per tile: live when any render pixel of it (grown by kMaskPad) is
+// unmasked, sampled as the loss samples the mask (core/Interpolation.cuh).
+struct TileActiveParams {  // 40 bytes: pushed directly
+    uint* mask;          // [I, H_mask, W_mask] uint8
+    int* tile_active;    // [I, tile_h, tile_w]
+    int32_t H_mask, W_mask;
+    int32_t width, height;
+    uint32_t tile_width, tile_height;
+    uint32_t total;
+    uint32_t wgs_per_row;
+};
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void tile_active_map(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                     uniform TileActiveParams p) {
+    uint t = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (t >= p.total) return;
+    uint tx = t % p.tile_width;
+    uint ty = (t / p.tile_width) % p.tile_height;
+    gindex_t b = gindex_t(t / (p.tile_width * p.tile_height));
+    bool live = false;
+    for (int dy = -kMaskPad; dy < TILE_SIZE_IY + kMaskPad && !live; ++dy) {
+        int y = int(ty) * TILE_SIZE_IY + dy;
+        if (y >= p.height) break;
+        if (y < 0) continue;
+        for (int dx = -kMaskPad; dx < TILE_SIZE_IX + kMaskPad; ++dx) {
+            int x = int(tx) * TILE_SIZE_IX + dx;
+            if (x >= p.width) break;
+            if (x < 0) continue;
+            float u = (float(x) + 0.5f) * float(p.W_mask) / float(p.width) - 0.5f;
+            float v = (float(y) + 0.5f) * float(p.H_mask) / float(p.height) - 0.5f;
+            int mx = max(0, min(p.W_mask - 1, int(floor(u + 0.5f))));
+            int my = max(0, min(p.H_mask - 1, int(floor(v + 0.5f))));
+            gindex_t mi = b * gindex_t(p.H_mask) * gindex_t(p.W_mask) +
+                          gindex_t(my) * gindex_t(p.W_mask) + gindex_t(mx);
+            if (u8_load(p.mask, mi) != 0) { live = true; break; }
+        }
+    }
+    p.tile_active[t] = live ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +233,7 @@ struct IsectWriteParams {  // 92 bytes: pushed directly
     i64mem_t* cum_tiles;  // [total] inclusive scan of tiles_per_splat
     u64key_t* isect_ids;  // [n_isects]
     int* flatten_ids;    // [n_isects]
+    int* tile_active;    // [I, tile_h, tile_w] 0/1; read when kSkipTiles
     uint32_t N;          // splats per image (non-packed iid = idx / N)
     uint32_t tile_width;
     uint32_t tile_height;
@@ -224,6 +301,7 @@ void intersect_tile_write(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                     gindex_t tile_id = iid * n_img_tiles +
                                       gindex_t(y) * gindex_t(p.tile_width) +
                                       gindex_t(x);
+                    if (kSkipTiles != 0 && p.tile_active[tile_id] == 0) continue;
                     p.isect_ids[cur_idx] = u64key_make(tile_id, depth_u32);
                     p.flatten_ids[cur_idx] = int(idx);
                     ++cur_idx;
@@ -243,6 +321,7 @@ void intersect_tile_write(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                     gindex_t tile_id = iid * n_img_tiles +
                                       gindex_t(y) * gindex_t(p.tile_width) +
                                       gindex_t(x);
+                    if (kSkipTiles != 0 && p.tile_active[tile_id] == 0) continue;
                     p.isect_ids[cur_idx] = u64key_make(tile_id, depth_u32);
                     p.flatten_ids[cur_idx] = int(idx);
                     ++cur_idx;
@@ -256,6 +335,7 @@ void intersect_tile_write(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 gindex_t tile_id = iid * n_img_tiles +
                                   gindex_t(i) * gindex_t(p.tile_width) +
                                   gindex_t(j);
+                if (kSkipTiles != 0 && p.tile_active[tile_id] == 0) continue;
                 p.isect_ids[cur_idx] = u64key_make(tile_id, depth_u32);
                 p.flatten_ids[cur_idx] = int(idx);
                 ++cur_idx;

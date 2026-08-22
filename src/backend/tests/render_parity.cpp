@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
 
         auto [isect_ids, flatten_ids, tile_offsets] = do_intersect_tile_generic(
             aabb_nd, depths_nd, proj_xy, proj_conic, proj_opac, C,
-            ttv(d_intr, {(int64_t)C, 4}), W, H, image_ids_ptr);
+            ttv(d_intr, {(int64_t)C, 4}), W, H, image_ids_ptr, /*tile_active=*/nullptr);
         backend::device_synchronize();
         if (check_error()) return 1;
 

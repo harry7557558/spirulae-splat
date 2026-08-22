@@ -202,7 +202,7 @@ static void render_one(RenderContext* ctx, int cam_idx,
     DeviceTensorFloatND proj_opac  = splats_s[1];
     auto [isect_ids, flatten_ids, tile_offsets] = do_intersect_tile_generic(
         aabb_nd, depths_nd, nullptr, &proj_conic, &proj_opac,
-        /*I=*/1, intrins, W, H, nullptr);
+        /*I=*/1, intrins, W, H, nullptr, /*tile_active=*/nullptr);
 
     // --- moment (+ rgb) rasterization ---
     rasterize_moments_3dgut_fwd(

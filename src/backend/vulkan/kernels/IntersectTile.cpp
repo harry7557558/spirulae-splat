@@ -18,17 +18,26 @@ inline constexpr int TILE_SIZE_IY = TILE_SIZE_Y * MACRO_TILE_SIZE_Y;
 // Mirror the params structs in shaders/intersect_tile.slang.
 struct IsectCountParams {
     uint64_t aabb, proj_xy, proj_conic, proj_opac, tiles_per_splat;
-    uint32_t tile_width, tile_height, total, wgs_per_row;
+    uint64_t image_ids, tile_active;
+    uint32_t N, tile_width, tile_height, total, wgs_per_row;
 };
-static_assert(sizeof(IsectCountParams) == 5 * 8 + 4 * 4,
+static_assert(sizeof(IsectCountParams) == 7 * 8 + 5 * 4 + 4 /*pad*/,
               "params layout must match the slang struct");
 
 struct IsectWriteParams {
     uint64_t image_ids, aabb, depths, proj_xy, proj_conic, proj_opac;
-    uint64_t cum_tiles, isect_ids, flatten_ids;
+    uint64_t cum_tiles, isect_ids, flatten_ids, tile_active;
     uint32_t N, tile_width, tile_height, total, wgs_per_row;
 };
-static_assert(sizeof(IsectWriteParams) == 9 * 8 + 5 * 4 + 4 /*pad*/,
+static_assert(sizeof(IsectWriteParams) == 10 * 8 + 5 * 4 + 4 /*pad*/,
+              "params layout must match the slang struct");
+
+struct TileActiveParams {
+    uint64_t mask, tile_active;
+    int32_t H_mask, W_mask, width, height;
+    uint32_t tile_width, tile_height, total, wgs_per_row;
+};
+static_assert(sizeof(TileActiveParams) == 2 * 8 + 8 * 4,
               "params layout must match the slang struct");
 
 struct IsectOffsetParams {
@@ -41,6 +50,29 @@ static_assert(sizeof(IsectOffsetParams) == 2 * 8 + 3 * 4 + 4 /*pad*/,
 }  // namespace
 
 /* API definition matching kernels/tile/IntersectTile.cuh */
+
+int64_t intersect_tile_count(int width, int height) {
+    return (int64_t)_CEIL_DIV((uint32_t)width, TILE_SIZE_IX) *
+           (int64_t)_CEIL_DIV((uint32_t)height, TILE_SIZE_IY);
+}
+
+void compute_tile_active(
+    TorchTensorView mask, int I, int width, int height, int32_t* tile_active
+) {
+    const auto& ms = std::get<2>(mask);
+    TileActiveParams p{};
+    p.mask = vkk::or_fallback((const void*)std::get<0>(mask));
+    p.tile_active = (uint64_t)tile_active;
+    p.H_mask = (int32_t)ms[1];
+    p.W_mask = (int32_t)ms[2];
+    p.width = width;
+    p.height = height;
+    p.tile_width = _CEIL_DIV((uint32_t)width, TILE_SIZE_IX);
+    p.tile_height = _CEIL_DIV((uint32_t)height, TILE_SIZE_IY);
+    p.total = (uint32_t)I * p.tile_width * p.tile_height;
+    vkk::dispatch_flat("intersect_tile.tile_active_map", {}, p.total, 256, &p,
+                       sizeof(p), &p.wgs_per_row);
+}
 
 std::tuple<
     DeviceVector<int64_t>,    // isect_ids [n_isects]
@@ -56,7 +88,8 @@ std::tuple<
     TorchTensorView intrins,      // [I, 4] (unused by the kernels, as in CUDA)
     const uint32_t image_width,
     const uint32_t image_height,
-    DeviceVector<int32_t>* image_ids  // null for non-packed
+    DeviceVector<int32_t>* image_ids, // null for non-packed
+    const int32_t* tile_active        // [I, tile_h, tile_w]; null = all live
 ) {
     (void)intrins;
     bool packed = image_ids != nullptr;
@@ -72,9 +105,11 @@ std::tuple<
     const uint64_t p_conic = proj_conic ? (uint64_t)proj_conic->data_ptr() : 0;
     const uint64_t p_opac = proj_opac ? (uint64_t)proj_opac->data_ptr() : 0;
 
-    // Spec IDs: 0 = kEllipse, 1 = kHasXy, 2 = kPacked (see intersect_tile.slang).
+    // Spec IDs: 0 = kEllipse, 1 = kHasXy, 2 = kPacked, 3 = kSkipTiles
+    // (see intersect_tile.slang).
     const backend::vk::SpecList mode_spec{p_conic ? 1u : 0u, p_xy ? 1u : 0u,
-                                          packed ? 1u : 0u};
+                                          packed ? 1u : 0u,
+                                          tile_active ? 1u : 0u};
 
     /* Count tiles intersected per splat */
     DeviceVector<int64_t> tiles_per_splat;
@@ -87,6 +122,9 @@ std::tuple<
         cp.proj_conic = p_conic;
         cp.proj_opac = p_opac;
         cp.tiles_per_splat = (uint64_t)tiles_per_splat.data_ptr();
+        cp.image_ids = packed ? (uint64_t)image_ids->data_ptr() : 0;
+        cp.tile_active = vkk::or_fallback(tile_active);
+        cp.N = N;
         cp.tile_width = tile_width;
         cp.tile_height = tile_height;
         cp.total = total_count;
@@ -139,6 +177,7 @@ std::tuple<
         wp.cum_tiles = (uint64_t)cum_tiles_per_splat.data_ptr();
         wp.isect_ids = (uint64_t)isect_ids_a.data_ptr();
         wp.flatten_ids = (uint64_t)flatten_ids_a.data_ptr();
+        wp.tile_active = vkk::or_fallback(tile_active);
         wp.N = N;
         wp.tile_width = tile_width;
         wp.tile_height = tile_height;

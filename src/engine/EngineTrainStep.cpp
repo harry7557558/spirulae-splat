@@ -3,8 +3,11 @@
 
 #include "engine/Engine.h"
 #include "engine/EngineInternal.h"
+#include "core/Env.h"
+#include "engine/EngineCommon.h"
 #include "engine/EngineState.h"
 
+#include <cstdio>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -78,6 +81,49 @@ static std::map<std::string, float> _engine_step_fwd_bwd_only(
         cfg.loss.weights[(int)LossWeightIndex::RgbDistReg],
         cfg.loss.weights[(int)LossWeightIndex::DepthDistReg],
         cfg.loss.weights[(int)LossWeightIndex::NormalDistReg]);
+    // A tile the mask excludes entirely is read by no term of the loss, so it
+    // is left out of the intersections; alpha supervision is the one term that
+    // reads a masked pixel (docs/datasets.md, "Skipping masked tiles").
+
+    // SS_NO_TILE_SKIP=1 renders every tile, to measure what the skip buys.
+    static const bool no_tile_skip = [] {
+        const char* v = spirula::env("NO_TILE_SKIP");
+        return v && *v && v[0] != '0';
+    }();
+    const bool alpha_reads_masked = no_tile_skip ||
+        cfg.loss.weights[(int)LossWeightIndex::AlphaSup] != 0.0f ||
+        cfg.loss.weights[(int)LossWeightIndex::AlphaSupUnder] != 0.0f;
+    if (engine().gt.has_mask && engine().gt.alpha.data_ptr() != nullptr &&
+        !alpha_reads_masked) {
+        const int64_t per_image = intersect_tile_count(
+            engine().camera.width, engine().camera.height);
+        engine().fwd.tile_active.resize(PoolSlot::IsectTileActive,
+                                        per_image * engine().camera.num);
+        compute_tile_active(_dt3d_tv(engine().gt.alpha), (int)engine().camera.num,
+                            engine().camera.width, engine().camera.height,
+                            engine().fwd.tile_active.data_ptr());
+        // SS_TILE_SKIP_LOG=1: what the mask actually saves, in English like
+        // the other deep diagnostics.
+        static const bool log_skip = [] {
+            const char* v = spirula::env("TILE_SKIP_LOG");
+            return v && *v;
+        }();
+        if (log_skip) {
+            const int64_t n = per_image * engine().camera.num;
+            std::vector<int32_t> h((size_t)n);
+            backend::memcpy_sync(h.data(), engine().fwd.tile_active.data_ptr(),
+                                 (size_t)n * sizeof(int32_t),
+                                 backend::MemcpyKind::DeviceToHost);
+            int64_t live = 0;
+            for (int64_t i = 0; i < n; ++i) live += h[(size_t)i] ? 1 : 0;
+            const int64_t total = n;
+            std::fprintf(stderr, "[tile-skip] %lld / %lld tiles live (%.1f%% skipped)\n",
+                         (long long)live, (long long)total,
+                         100.0 * (double)(total - live) / (double)std::max<int64_t>(total, 1));
+        }
+    } else {
+        engine().fwd.tile_active = DeviceVector<int32_t>();
+    }
     forward_3dgs(primitive, sh_degree, packed, /*output_median=*/false, (int)dist_type);
 
     engine().ppisp.cur_run_before_bilagrid = cfg.ppisp.run_before_bilagrid;

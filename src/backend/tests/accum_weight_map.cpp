@@ -145,7 +145,7 @@ void run_mode(bool packed, DensifyAccumMode accum_mode) {
         (packed && cam_ids.data_ptr()) ? &cam_ids : nullptr;
     auto [isect_ids, flatten_ids, tile_offsets] = do_intersect_tile_generic(
         aabb_nd, depths_nd, &splats_s[0], &splats_s[2], &splats_s[3], C,
-        ttv(d_intr, {(int64_t)C, 4}), W, H, img_ids);
+        ttv(d_intr, {(int64_t)C, 4}), W, H, img_ids, /*tile_active=*/nullptr);
     auto rout = rasterize_to_pixels_3dgs_fwd(N, in_splats, splats_s, gauss_ids,
                                              W, H, tile_offsets, flatten_ids,
                                              DistortionType::None, false);

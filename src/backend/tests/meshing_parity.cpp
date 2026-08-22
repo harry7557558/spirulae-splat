@@ -448,7 +448,7 @@ int main(int argc, char** argv) {
         DeviceTensorFloatND proj_opac = splats_s[1];
         auto [isect_ids, flatten_ids, tile_offsets] = do_intersect_tile_generic(
             aabb_nd, depths_nd, nullptr, &proj_conic, &proj_opac, 1,
-            ttv(d_intr + 4 * cam, {1, 4}), W, H, nullptr);
+            ttv(d_intr + 4 * cam, {1, 4}), W, H, nullptr, /*tile_active=*/nullptr);
         backend::device_synchronize();
         if (check_error()) return 1;
 

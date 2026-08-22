@@ -7,6 +7,8 @@ namespace SlangProjectionUtils {
 }
 
 #include "core/Common.cuh"
+#include "core/Env.h"
+#include "core/Interpolation.cuh"
 
 #include <cooperative_groups.h>
 
@@ -54,7 +56,9 @@ inline __device__ int count_ellipse_grid_overlaps(
     float2 xy,
     float3 inv_cov,
     int grid_xmin, int grid_xmax,
-    int grid_ymin, int grid_ymax
+    int grid_ymin, int grid_ymax,
+    const int32_t* __restrict__ live,   // this image's tiles, or null
+    uint32_t tile_width
 ) {
     // count the number grid cells that overlap with an ellipse
 
@@ -69,7 +73,11 @@ inline __device__ int count_ellipse_grid_overlaps(
             int x1 = int(ceil((bound.y + xy.x) / TILE_SIZE_IX));
             x0 = clamp(x0, grid_xmin, grid_xmax);
             x1 = clamp(x1, grid_xmin, grid_xmax);
-            n_tiles += max(x1-x0, 0);
+            if (live == nullptr)
+                n_tiles += max(x1-x0, 0);
+            else
+                for (int x = x0; x < x1; x++)
+                    n_tiles += live[(int64_t)y * tile_width + x] ? 1 : 0;
         }
     } else {
         inv_cov = {inv_cov.z, inv_cov.y, inv_cov.x};
@@ -81,7 +89,11 @@ inline __device__ int count_ellipse_grid_overlaps(
             int y1 = int(ceil((bound.y + xy.y) / TILE_SIZE_IY));
             y0 = clamp(y0, grid_ymin, grid_ymax);
             y1 = clamp(y1, grid_ymin, grid_ymax);
-            n_tiles += max(y1-y0, 0);
+            if (live == nullptr)
+                n_tiles += max(y1-y0, 0);
+            else
+                for (int y = y0; y < y1; y++)
+                    n_tiles += live[(int64_t)y * tile_width + x] ? 1 : 0;
         }
     }
 
@@ -103,6 +115,9 @@ __global__ void intersect_tile_kernel(
     const int64_t *__restrict__ cum_tiles_per_splat, // [..., N], optional for counting pass
     const uint32_t tile_width,
     const uint32_t tile_height,
+    // [I, tile_height, tile_width]: 0 marks a tile the loss never reads, which
+    // both passes leave out so the raster gets an empty range for it.
+    const int32_t *__restrict__ tile_active,
     int64_t *__restrict__ tiles_per_splat, // [..., N]
     int64_t *__restrict__ isect_ids,  // [n_isects]
     int32_t *__restrict__ flatten_ids  // [n_isects]
@@ -145,21 +160,32 @@ __global__ void intersect_tile_kernel(
     tile_min.y = (uint32_t)min(max(0, (int)floorf((ymin + 0.5f) / TILE_SIZE_IY)), (int)tile_height);
     tile_max.x = (uint32_t)min(max(0, (int)ceilf((xmax + 0.5f) / TILE_SIZE_IX)), (int)tile_width);
     tile_max.y = (uint32_t)min(max(0, (int)ceilf((ymax + 0.5f) / TILE_SIZE_IY)), (int)tile_height);
+    const int64_t iid_c = (image_ids ? image_ids[idx] : idx / N);
+    const int32_t* live = tile_active
+        ? tile_active + iid_c * (int64_t)tile_width * tile_height : nullptr;
     if constexpr (is_counting_pass) {
         // counting pass only writes out tiles_per_splat
         if constexpr (is_ellipse)
             tiles_per_splat[idx] = count_ellipse_grid_overlaps(
                 xy, conic,
-                tile_min.x, tile_max.x, tile_min.y, tile_max.y
+                tile_min.x, tile_max.x, tile_min.y, tile_max.y,
+                live, tile_width
             );
-        else
+        else if (tile_active == nullptr)
             tiles_per_splat[idx] = max(static_cast<int32_t>(
                 (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
             ), 0);
+        else {
+            int n = 0;
+            for (uint32_t i = tile_min.y; i < tile_max.y; ++i)
+                for (uint32_t j = tile_min.x; j < tile_max.x; ++j)
+                    n += live[(int64_t)i * tile_width + j] ? 1 : 0;
+            tiles_per_splat[idx] = n;
+        }
         return;
     }
 
-    int64_t iid = (image_ids ? image_ids[idx] : idx / N);
+    int64_t iid = iid_c;
 
     float depth_f32 = depths_buffer[idx];
     depth_f32 = fabsf(depth_f32);
@@ -187,6 +213,7 @@ __global__ void intersect_tile_kernel(
                     tile_min.x, tile_max.x
                 );
                 for (int x = min_x; x < max_x && cur_idx < max_idx; x++) {
+                    if (live && !live[(int64_t)y * tile_width + x]) continue;
                     int64_t tile_id = iid * tile_width * tile_height + int64_t(y) * tile_width + int64_t(x);
                     isect_ids[cur_idx] = (tile_id << 32) | (int64_t)depth_u32;
                     flatten_ids[cur_idx] = static_cast<int32_t>(idx);
@@ -209,6 +236,7 @@ __global__ void intersect_tile_kernel(
                     tile_min.y, tile_max.y
                 );
                 for (int y = min_y; y < max_y && cur_idx < max_idx; y++) {
+                    if (live && !live[(int64_t)y * tile_width + x]) continue;
                     int64_t tile_id = iid * tile_width * tile_height + int64_t(y) * tile_width + int64_t(x);
                     isect_ids[cur_idx] = (tile_id << 32) | (int64_t)depth_u32;
                     flatten_ids[cur_idx] = static_cast<int32_t>(idx);
@@ -221,6 +249,7 @@ __global__ void intersect_tile_kernel(
         for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
             for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
                 if (cur_idx >= max_idx) break;
+                if (live && !live[(int64_t)i * tile_width + j]) continue;
                 int64_t tile_id = iid * tile_width * tile_height + i * tile_width + j;
                 isect_ids[cur_idx] = (tile_id << 32) | (int64_t)depth_u32;
                 flatten_ids[cur_idx] = static_cast<int32_t>(idx);
@@ -277,6 +306,68 @@ __global__ void intersect_offset_kernel(
     }
 }
 
+// The depth -> normal stencil reads one pixel past its own: at 0 the warped
+// engine_train_parity case moves, at 1 it is bit-identical.
+static constexpr int kMaskPad = 1;
+
+// One thread per tile: live when any render pixel of it (grown by kMaskPad) is
+// unmasked, sampled exactly as the loss samples the mask (core/Interpolation.cuh).
+
+__global__ void tile_active_kernel(
+    const bool* __restrict__ mask,      // [I, H_mask, W_mask]
+    const int I, const int H_mask, const int W_mask,
+    const int width, const int height,
+    const uint32_t tile_width, const uint32_t tile_height,
+    int32_t* __restrict__ tile_active
+) {
+    uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= (uint32_t)I * tile_width * tile_height) return;
+    const uint32_t tx = t % tile_width;
+    const uint32_t ty = (t / tile_width) % tile_height;
+    const int b = (int)(t / (tile_width * tile_height));
+    bool live = false;
+    for (int dy = -kMaskPad; dy < TILE_SIZE_IY + kMaskPad && !live; ++dy) {
+        const int y = (int)ty * TILE_SIZE_IY + dy;
+        if (y >= height) break;
+        if (y < 0) continue;
+        for (int dx = -kMaskPad; dx < TILE_SIZE_IX + kMaskPad; ++dx) {
+            const int x = (int)tx * TILE_SIZE_IX + dx;
+            if (x >= width) break;
+            if (x < 0) continue;
+            if (nearest_sample_b(mask, b, x, y, width, height, W_mask, H_mask)) {
+                live = true;
+                break;
+            }
+        }
+    }
+    tile_active[t] = live ? 1 : 0;
+}
+
+// Tiles one image of this size has, i.e. its share of the live-tile map.
+/*[AutoHeaderGeneratorExport]*/
+int64_t intersect_tile_count(int width, int height) {
+    return (int64_t)_CEIL_DIV((uint32_t)width, TILE_SIZE_IX) *
+           _CEIL_DIV((uint32_t)height, TILE_SIZE_IY);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void compute_tile_active(
+    TorchTensorView mask,   // [I, H_mask, W_mask] bool
+    int I, int width, int height,
+    int32_t* tile_active    // [I, tile_h, tile_w]
+) {
+    const auto& ms = std::get<2>(mask);
+    const int H_mask = (int)ms[1], W_mask = (int)ms[2];
+    const uint32_t tile_width = _CEIL_DIV((uint32_t)width, TILE_SIZE_IX);
+    const uint32_t tile_height = _CEIL_DIV((uint32_t)height, TILE_SIZE_IY);
+    const uint32_t n_tiles = (uint32_t)I * tile_width * tile_height;
+    tile_active_kernel<<<_LAUNCH_ARGS_1D(n_tiles, 256)>>>(
+        (const bool*)std::get<0>(mask), I, H_mask, W_mask, width, height,
+        tile_width, tile_height, tile_active);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
     DeviceVector<int64_t>,    // isect_ids [n_isects]
@@ -292,7 +383,8 @@ std::tuple<
     TorchTensorView intrins,      // [I, 4]
     const uint32_t image_width,
     const uint32_t image_height,
-    DeviceVector<int32_t>* image_ids  // null for non-packed
+    DeviceVector<int32_t>* image_ids, // null for non-packed
+    const int32_t* tile_active        // [I, tile_h, tile_w]; null = all live
 ) {
     bool packed = image_ids != nullptr;
     // depths is always [*N] float32 (numel = N or nnz), while aabb is [*N, 4]
@@ -312,7 +404,9 @@ std::tuple<
         intersect_tile_kernel<true, false>
     )<<<_LAUNCH_ARGS_1D(I*N, 256)>>>(
         packed ? 1 : I, N,
-        nullptr,  // image_ids
+        // The count is per-image once tiles can be skipped: in packed mode
+        // every splat would otherwise be counted against image 0's map.
+        image_ids != nullptr ? image_ids->data_ptr() : nullptr,
         nullptr,  // intrins
         reinterpret_cast<const float4*>(aabb.data_ptr()),
         depths.data_ptr(),
@@ -321,6 +415,7 @@ std::tuple<
         proj_opac   != nullptr ? proj_opac->data_ptr()           : nullptr,
         nullptr,  // cum_tiles_per_splat
         tile_width, tile_height,
+        tile_active,
         tiles_per_splat.data_ptr(),
         nullptr, nullptr
     );
@@ -339,6 +434,13 @@ std::tuple<
         cudaMemcpy(&n_isects,
                    cum_tiles_per_splat.data_ptr() + (total_count - 1),
                    sizeof(int64_t), cudaMemcpyDeviceToHost);
+
+    // SS_TILE_SKIP_LOG=1: what the live-tile map removes from the sort and
+    // the raster, which is what decides whether it pays.
+    static const bool log_isects = [] {
+        const char* v = spirula::env("TILE_SKIP_LOG");
+        return v && *v;
+    }();
 
     DeviceTensor3D<int32_t> offsets_out;
     offsets_out.resize(PoolSlot::IsectOffsets, I, tile_height, tile_width);
@@ -370,11 +472,16 @@ std::tuple<
         proj_opac   != nullptr ? proj_opac->data_ptr()           : nullptr,
         cum_tiles_per_splat.data_ptr(),
         tile_width, tile_height,
+        tile_active,
         nullptr,
         isect_ids_a.data_ptr(),
         flatten_ids_a.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    if (log_isects)
+        std::fprintf(stderr, "[isects] %lld pairs, %s\n", (long long)n_isects,
+                     tile_active ? "masked tiles skipped" : "every tile");
 
     /* Sort by (tile_id << 32 | depth) key */
     cub::DoubleBuffer<int64_t> d_keys(isect_ids_a.data_ptr(), isect_ids_b.data_ptr());
