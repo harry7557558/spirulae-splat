@@ -158,6 +158,48 @@ the fused projection path still applies.
 Each post camera carries its own intrinsics (an off-centre principal point is
 what a crop is) and its frame's rotation, and the GT warp samples through
 exactly that table, so the face that is rendered is the face that was warped.
+
+### One face size, or one per lens
+
+`--warp-face-fit` decides whether the faces of one camera share a size.
+
+- **`uniform`** is the plan above: one tile covers every crop, so a batch
+  renders all of a camera's faces in one pass -- which is what the fused
+  projection-backward optimizer (`--use-fused-proj-bwd-optim`) needs.
+- **`per-face`** gives each frame's crop its own face, rounded up to a multiple
+  of 32 px so near-equal faces still share a size, and renders **one pass per
+  distinct size**, accumulating gradient across the passes. Every pass is
+  weighted by its face count, so a face carries exactly the weight it would in
+  one batch -- the loss, the gradient and the densification score are the
+  uniform plan's, only the pixels differ.
+- **`auto`** (default) picks `per-face` only when the run already renders in
+  several passes -- when the fused optimizer is off anyway, either because it
+  was turned off or because `--split-batch` is active on a step of more than
+  one image -- and the crops save at least 10% of the pixels. Otherwise, or
+  when the saving would have to pay for the fused optimizer itself, it stays
+  `uniform`.
+
+Splitting is per input image, so a face pass renders that image's faces of one
+size; the passes of a step accumulate into the same gradient buffers and one
+optimizer step follows.
+
+Measured, 3000 steps on an RTX 5070 laptop, gradient already accumulating
+across passes in both columns (`--use-fused-proj-bwd-optim 0 --split-batch 1`):
+
+| capture | fit | faces | passes | time | peak VRAM |
+|---|---|---|---|---|---|
+| 1000x1500 fisheye, 108x162 deg | uniform | 6 x 548x298 | 1 | 40.4 s | 804 MiB |
+| | per-face | 5, 548 wide | 3 | 41.1 s | 684 MiB |
+| 960x960 fisheye, ~200 deg | uniform | 5 x 430x430 | 1 | 60.1 s | 978 MiB |
+| | per-face | 5, 430 wide | 2 | 60.0 s | 942 MiB |
+
+So where the passes are already paid for, per-face costs nothing in time and
+returns 4-15% of the VRAM. Where they are not, it costs the fused optimizer:
+the same capture with it available runs 37.2 s / 722 MiB uniform against
+40.9 s / 690 MiB per-face -- 10% slower to save 4% of the memory, which is why
+`auto` leaves it alone there. The remaining waste in both fits is the masked
+part of a face, which the rasterizer still runs; skipping fully-masked tiles
+would take it without splitting anything.
 Rasterization still runs over a face's masked-out pixels; a lens boundary that
 is not a rectangle leaves some, which the synthesized FOV mask excludes from
 the loss. A lens whose visible rays fit one face is not split at all.

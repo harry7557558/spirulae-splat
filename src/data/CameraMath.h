@@ -101,17 +101,24 @@ std::vector<double> visible_boundary(const Camera& cam, int samples);
 const double* fisheye_face_axes();
 const double* equirect_face_axes();
 
-// One rendered face: a pinhole inside frame `face` of the camera's table. All
-// faces of one camera share width, height and focal, so a batch is one tensor.
+// One rendered face: a pinhole inside frame `face` of the camera's table.
+// `crop_*` is the extent the lens actually fills there, which `width` and
+// `height` round up to (see FaceFit).
 struct SplitFace {
     int    face = 0;
     int    width = 0, height = 0;
+    int    crop_w = 0, crop_h = 0;
     double fx = 0, fy = 0, cx = 0, cy = 0;
 };
 
-// Each frame cropped to the rays the lens holds, the crops covered by one
-// tile chosen for the lowest pixel count plus a fixed cost per face. The focal
-// is that of a 90-degree face of ceil(sqrt(W*H/K)) pixels, whatever the lens.
-std::vector<SplitFace> plan_split_faces(const Camera& cam);
+// How the crops become faces: one common tile so a batch renders them all, or
+// each its own crop -- no wasted pixels, one pass per distinct size.
+// docs/datasets.md, "The split".
+enum class FaceFit { Uniform, PerFace };
+
+// The focal is that of a 90-degree face of ceil(sqrt(W*H/K)) pixels, whatever
+// the lens, so the pixel density does not move with the field of view.
+std::vector<SplitFace> plan_split_faces(const Camera& cam,
+                                        FaceFit fit = FaceFit::Uniform);
 
 }  // namespace camhost

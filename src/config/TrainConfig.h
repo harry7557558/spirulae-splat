@@ -128,6 +128,7 @@ inline int train_tier_rank(const char* tier) {
     X(float, validation_fraction, 0.0f, "dataset", "expert", "")             \
     X(bool, warp_to_pinhole, false, "dataset", "advanced", "")               \
     X(bool, warp_spherical_to_pinhole, true, "dataset", "advanced", "")      \
+    X(std::string, warp_face_fit, "auto", "dataset", "advanced", "auto|uniform|per-face") \
     X(bool, deblur_training_images, false, "dataset", "stub", "")            \
                                                                              \
     /* ==== scene -- how the capture is placed, oriented and scaled ==== */  \
@@ -334,7 +335,8 @@ struct TrainConfig {
     X(orientation_method) X(center_method) X(auto_scale_poses) \
     X(outlier_threshold) X(train_frame) X(eval_mode) X(train_split_fraction) \
     X(eval_interval) X(depth_unit_scale_factor) X(validation_fraction) \
-    X(warp_to_pinhole) X(warp_spherical_to_pinhole) X(load_masks) \
+    X(warp_to_pinhole) X(warp_spherical_to_pinhole) X(warp_face_fit) \
+    X(load_masks) \
     X(load_depths) X(load_normals) X(relative_scale) \
     /* end */
 

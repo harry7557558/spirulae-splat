@@ -95,6 +95,14 @@ struct DataManagerConfig {
 // Decoded batch
 // ===========================================================================
 
+// One run of the face axis at one size: faces [k0, k1) of every input image in
+// a batch, rendered at width x height. A camera whose faces differ in size
+// takes one render pass per entry (data/CameraMath.h, FaceFit).
+struct WarpFacePass {
+    int32_t k0 = 0, k1 = 0, width = 0, height = 0;
+};
+
+
 // Element-type tag, matching the engine's set_training_data inputs.
 //   RGB:    UINT8 (sRGB 0..255), UINT16 (0..65535), or FLOAT32 (0..1).
 //   MASK:   UINT8 (treated as bool; nonzero -> valid pixel).
@@ -177,6 +185,10 @@ struct DecodedBatch {
     // Each post camera's frame in its input camera's coordinates, rows (ax,
     // ay, az): the face the warp samples for. Length 9 * num; empty at K == 1.
     std::vector<float>     face_axes;
+
+    // The face axis in runs of equal size, in order; one entry unless the
+    // camera was split per face. `width` / `height` above are the first run's.
+    std::vector<WarpFacePass> face_passes;
 
     // Per-INPUT intrins / dist_coeffs (length input_num). Populated when
     // K > 1 and the wide warp kernel (fisheye/equisolid) needs them. The
@@ -353,6 +365,9 @@ public:
     // would be a no-op). Used by the engine to resolve the case where the
     // user has both `split_batch` and `use_fused_proj_bwd_optim` enabled.
     int64_t max_input_batch_size() const;
+
+    // Most render passes one input image costs: 1 unless faces differ in size.
+    int max_face_passes() const;
 
 private:
     std::unique_ptr<DataManagerImpl> _impl;

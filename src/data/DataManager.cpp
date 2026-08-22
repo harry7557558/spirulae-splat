@@ -139,11 +139,13 @@ struct IndexGroup {
     int32_t              depth_h  = 0, depth_w  = 0;
     int32_t              normal_h = 0, normal_w = 0;
 
-    // Warp metadata, part of the group key: the split factor and the
-    // post-split face resolution (= the input's when K == 1).
+    // Warp metadata, part of the group key: the split factor, the first
+    // pass's resolution (= the input's when K == 1) and the runs of equal
+    // face size the faces fall into.
     int32_t              K        = 1;
     int32_t              out_h    = 0;
     int32_t              out_w    = 0;
+    std::vector<WarpFacePass> passes;
 
     std::vector<int32_t> indices;       // dataset-global indices, shuffled
     size_t               cursor = 0;    // next index to emit
@@ -675,6 +677,13 @@ public:
     bool    has_val()      const { return !_val_indices.empty(); }
     CacheMode cache_mode() const { return _cfg.cache_mode; }
 
+    int max_face_passes() const {
+        int n = 1;
+        for (const auto& g : _train_groups) n = std::max(n, (int)g.passes.size());
+        for (const auto& g : _val_groups)   n = std::max(n, (int)g.passes.size());
+        return n;
+    }
+
     // Largest INPUT-image batch size (pre-split) for a single training step.
     // The engine's split_batch dispatcher carves a sub-batch per INPUT image
     // (the K post-split cameras of one input stay together in one sub-batch,
@@ -980,18 +989,10 @@ DataManagerImpl::DataManagerImpl(
         throw std::runtime_error(
             "DataManager: post_widths / post_heights / face_axes length "
             "mismatch (expected N_post, N_post and 9*N_post, or all empty)");
-    for (int64_t i = 0; i < N; ++i) {
+    for (int64_t i = 0; i < N; ++i)
         if (_K_per_camera[i] > 1 && _post_widths.empty())
             throw std::runtime_error(
                 "DataManager: a split camera needs post_widths / post_heights / face_axes");
-        for (int k = 1; k < _K_per_camera[i] && !_post_widths.empty(); ++k) {
-            const int64_t o = _post_offsets[i];
-            if (_post_widths[o + k] != _post_widths[o] ||
-                _post_heights[o + k] != _post_heights[o])
-                throw std::runtime_error(
-                    "DataManager: the faces of one camera must share a size");
-        }
-    }
     if (!_mask_filenames.empty()   && (int64_t)_mask_filenames.size()   != N)
         throw std::runtime_error("DataManager: mask_filenames length mismatch");
 
@@ -1138,11 +1139,11 @@ void DataManagerImpl::probe_dtypes() {
 std::vector<IndexGroup> DataManagerImpl::build_index_groups_member(
     const std::vector<int32_t>& flat_indices) const
 {
-    // Group key: (W, H, camera_model, tier, redistort, K, out_W, out_H).
+    // Group key: (W, H, model, tier, redistort, K, out_W, out_H, size run).
     // std::map handles tuple keys natively, and group build happens once at
     // construction, so we don't need an unordered_map's hash machinery here.
     std::map<std::tuple<int32_t, int32_t, int32_t, int32_t, int32_t,
-                        int32_t, int32_t, int32_t>,
+                        int32_t, int32_t, int32_t, int32_t>,
              IndexGroup> by_shape;
 
     // Track first per-modality mismatch for a one-shot warning. Mutable so
@@ -1155,9 +1156,17 @@ std::vector<IndexGroup> DataManagerImpl::build_index_groups_member(
         const int32_t K_i = _K_per_camera[i];
         const int32_t out_w = K_i > 1 ? _post_widths[_post_offsets[i]]  : _widths[i];
         const int32_t out_h = K_i > 1 ? _post_heights[_post_offsets[i]] : _heights[i];
+        // The whole size sequence keys the group, not just the first face:
+        // per-image intrinsics give two cameras of one shape different crops,
+        // and a batch renders its faces run by run.
+        int32_t sig = 0;
+        for (int k = 0; K_i > 1 && k < K_i; ++k) {
+            const int64_t o = _post_offsets[i] + k;
+            sig = sig * 31 + _post_widths[o] * 7919 + _post_heights[o];
+        }
         auto key = std::make_tuple(_widths[i], _heights[i], _camera_models[i],
                                    _camera_distortions[i],
-                                   (int32_t)redistort_i, K_i, out_w, out_h);
+                                   (int32_t)redistort_i, K_i, out_w, out_h, sig);
         auto& g = by_shape[key];
         if (g.indices.empty()) {
             g.width  = _widths[i];
@@ -1168,6 +1177,16 @@ std::vector<IndexGroup> DataManagerImpl::build_index_groups_member(
             g.K      = K_i;
             g.out_w  = out_w;
             g.out_h  = out_h;
+            for (int32_t k = 0; k < K_i; ++k) {
+                const int64_t o = _post_offsets[i] + k;
+                const int32_t w = K_i > 1 ? _post_widths[o]  : out_w;
+                const int32_t h = K_i > 1 ? _post_heights[o] : out_h;
+                if (!g.passes.empty() && g.passes.back().width == w &&
+                    g.passes.back().height == h)
+                    g.passes.back().k1 = k + 1;
+                else
+                    g.passes.push_back(WarpFacePass{k, k + 1, w, h});
+            }
         }
 
         // Take the max-area shape across the group. We compare by area so
@@ -1384,6 +1403,7 @@ void DataManagerImpl::allocate_batch(
     b.K            = K;
     b.input_model  = g.model;
     b.input_distortion = g.distortion;
+    b.face_passes  = g.passes;
 
     b.viewmats.assign((size_t)B_post * 16, 0.0f);
     if (K > 1) b.face_axes.assign((size_t)B_post * 9, 0.0f);
@@ -2222,3 +2242,4 @@ bool      DataManager::has_masks()      const              { return _impl->has_m
 bool      DataManager::has_depths()     const              { return _impl->has_depths(); }
 bool      DataManager::has_normals()    const              { return _impl->has_normals(); }
 int64_t   DataManager::max_input_batch_size() const         { return _impl->max_input_batch_size(); }
+int       DataManager::max_face_passes() const              { return _impl->max_face_passes(); }

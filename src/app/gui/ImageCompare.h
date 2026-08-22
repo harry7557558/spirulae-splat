@@ -36,6 +36,10 @@ namespace gui {
 // (ImageCompare.cpp's face_layout unfolds the cube).
 struct FaceCell { float x, y, w, h; int turns; };   // turns = quarter turns clockwise
 
+// Where one view sits in the packed texture, in texels. Views differ in size
+// when the faces were cropped per lens, so each carries its own rect.
+struct AtlasRect { int x, y, w, h; };
+
 class ImageCompare {
 public:
     ~ImageCompare();
@@ -79,11 +83,12 @@ private:
         uint64_t id = 0;
         Job  job;
         int  views = 1;
-        int  view_w = 0, view_h = 0;       // one view
-        int  pack_cols = 1, pack_rows = 1; // the packed grid, in views
+        int  view_w = 0, view_h = 0;       // the largest view
+        int  atlas_w = 0, atlas_h = 0;     // the packed texture, in texels
         int  canvas_w = 0, canvas_h = 0;   // the unfolded layout, in pixels
-        std::vector<FaceCell> cells;       // one per view, in view order
-        std::vector<uint8_t> gt, render;   // [pack_rows*view_h, pack_cols*view_w, 3]
+        std::vector<FaceCell>  cells;      // where each view is drawn
+        std::vector<AtlasRect> uv;         // where each view is stored
+        std::vector<uint8_t> gt, render;   // [atlas_h, atlas_w, 3]
         // The supervision modalities on the same grid, already coloured
         // (app/DepthColor.h) so the UI thread only uploads. Empty when the
         // run does not load them.
@@ -110,10 +115,9 @@ private:
     struct Pane {
         GLuint tex = 0;
         int tex_w = 0, tex_h = 0;
-        int view_w = 0, view_h = 0;
-        int pack_cols = 1;
         int canvas_w = 0, canvas_h = 0;
-        std::vector<FaceCell> cells;
+        std::vector<FaceCell>  cells;
+        std::vector<AtlasRect> uv;
     };
 
     void worker_loop();

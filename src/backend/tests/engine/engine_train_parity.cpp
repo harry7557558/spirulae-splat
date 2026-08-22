@@ -269,7 +269,7 @@ int main(int argc, char** argv) {
                 wc.in_H, wc.in_W,
                 ttv(gt_normal.data(), 1, {1, wc.in_H, wc.in_W, 3}),
                 wc.in_H, wc.in_W, ttv(axes.data(), 4, {K, 3, 3}),
-                ttv_null(), cfg);
+                /*face_passes=*/{}, ttv_null(), cfg);
             push_losses(losses);
         }
     }

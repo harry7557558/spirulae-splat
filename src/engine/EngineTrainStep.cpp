@@ -549,14 +549,9 @@ std::map<std::string, float> engine_train_step(
 }
 
 
-// Warped variant of the split-batch dispatcher. Splits per INPUT image
-// (B_in chunks of K post-split cameras each). Numerically: each sub-batch's
-// per-pixel loss kernel sees K cameras, normalizes by 1/(K*H*W). Accumulated
-// across B_in sub-batches the per-splat grad ends up B_in x what an unsplit
-// run on B_in*K post-cams would produce; grad_scale = 1/B_in in the optim
-// step's splat Adam kernels brings it back to the unsplit-equivalent
-// magnitude (mod atomicAdd reordering + the radii zero-on-first-sub-batch
-// fix in EngineForward.cpp).
+// Warped split dispatcher: one pass per (input image, run of equal-size
+// faces). A pass normalizes by 1/(cameras*H*W) and grad_scale = 1/passes puts
+// that back, so passes weigh equally -- pixels, not faces, for unequal faces.
 static std::map<std::string, float> _engine_train_step_split_warped(
     int step, int max_steps,
     std::string primitive, int sh_degree, bool packed,
@@ -580,6 +575,7 @@ static std::map<std::string, float> _engine_train_step_split_warped(
     TorchTensorView gt_normal_byte,
     int normal_in_H, int normal_in_W,
     TorchTensorView face_axes,
+    const std::vector<WarpFacePass>& face_passes,
     TorchTensorView bilagrid_cam_indices,
     const EngineStepConfig& cfg
 ) {
@@ -598,10 +594,13 @@ static std::map<std::string, float> _engine_train_step_split_warped(
     const std::string post_model = K > 1 ? "PINHOLE" : input_camera_model;
     const std::string post_dist  = K > 1 ? "NONE"    : input_distortion;
 
-    // Single input image (B_in == 1) -> nothing to split; route through the
+    const int C = face_passes.empty() ? 1 : (int)face_passes.size();
+    const int64_t P = B_in * C;
+
+    // One input image and one face size -> nothing to split; route through the
     // standard warped path so K cams are processed in one shot. grad_scale
     // stays at 1.0 (the normal post-batch normalization is correct).
-    if (B_in == 1) {
+    if (P == 1) {
         set_camera_params(out_W, out_H, post_model, post_dist,
                           post_viewmats, post_intrins, post_dist_coeffs);
         set_training_data_warped(input_camera_model, input_distortion,
@@ -627,7 +626,7 @@ static std::map<std::string, float> _engine_train_step_split_warped(
     EngineStepConfig cfg_sub = cfg;
     const float beta_orig = cfg.loss.color_shift_reg_beta;
     if (beta_orig > 0.0f && beta_orig < 1.0f) {
-        cfg_sub.loss.color_shift_reg_beta = powf(beta_orig, 1.0f / (float)B_in);
+        cfg_sub.loss.color_shift_reg_beta = powf(beta_orig, 1.0f / (float)P);
     }
 
     int64_t N_splats = engine().cur_num_splats;
@@ -641,72 +640,89 @@ static std::map<std::string, float> _engine_train_step_split_warped(
 
     std::map<std::string, float> agg;
 
-    for (int64_t k = 0; k < B_in; ++k) {
-        engine().optim.skip_grad_zero = (k > 0);
-
+    for (int64_t j = 0; j < B_in; ++j) {
         // Per-input-image slices (B_in axis).
-        TorchTensorView rgb_k   = _slice_tv_first_dim(gt_rgb_byte,        k);
-        TorchTensorView mask_k  = _slice_tv_first_dim(gt_alpha_byte,      k);
-        TorchTensorView dep_k   = _slice_tv_first_dim(gt_depth_byte,      k);
-        TorchTensorView nrm_k   = _slice_tv_first_dim(gt_normal_byte,     k);
-        TorchTensorView i_itr_k = _slice_tv_first_dim(input_intrins,      k);
-        TorchTensorView i_dst_k = _slice_tv_first_dim(input_dist_coeffs,  k);
+        TorchTensorView rgb_k   = _slice_tv_first_dim(gt_rgb_byte,        j);
+        TorchTensorView mask_k  = _slice_tv_first_dim(gt_alpha_byte,      j);
+        TorchTensorView dep_k   = _slice_tv_first_dim(gt_depth_byte,      j);
+        TorchTensorView nrm_k   = _slice_tv_first_dim(gt_normal_byte,     j);
+        TorchTensorView i_itr_k = _slice_tv_first_dim(input_intrins,      j);
+        TorchTensorView i_dst_k = _slice_tv_first_dim(input_dist_coeffs,  j);
         TorchTensorView i_src_m_k = std::get<0>(input_source_models) == 0
-            ? input_source_models : _slice_tv_first_dim(input_source_models, k);
+            ? input_source_models : _slice_tv_first_dim(input_source_models, j);
         TorchTensorView i_src_p_k = std::get<0>(input_source_params) == 0
-            ? input_source_params : _slice_tv_first_dim(input_source_params, k);
+            ? input_source_params : _slice_tv_first_dim(input_source_params, j);
 
-        // Per-input-image POST-split slices (B_post axis, K consecutive rows
-        // per input).
-        TorchTensorView p_vmt_k = _slice_tv_range_first_dim(post_viewmats,     k * K, K);
-        TorchTensorView p_itr_k = _slice_tv_range_first_dim(post_intrins,      k * K, K);
-        TorchTensorView p_dst_k = _slice_tv_range_first_dim(post_dist_coeffs,  k * K, K);
-        TorchTensorView bgi_k   = _slice_tv_range_first_dim(bilagrid_cam_indices, k * K, K);
-        TorchTensorView axes_k  = std::get<0>(face_axes) == 0
-            ? face_axes : _slice_tv_range_first_dim(face_axes, k * K, K);
+        for (int c = 0; c < C; ++c) {
+            // The faces of this pass, a run of the K axis at one size. Their
+            // POST rows are contiguous because the run is.
+            const int k0 = C == 1 ? 0 : face_passes[(size_t)c].k0;
+            const int Kc = (C == 1 ? K : face_passes[(size_t)c].k1) - k0;
+            const int Wc = C == 1 ? out_W : face_passes[(size_t)c].width;
+            const int Hc = C == 1 ? out_H : face_passes[(size_t)c].height;
+            const int64_t row = j * K + k0;
+            engine().optim.skip_grad_zero = (j * C + c > 0);
+            // A pass normalizes by its own camera count, so weighting it by
+            // that count leaves every FACE weighted alike -- the same loss,
+            // grad and densification score an unsplit batch would produce.
+            EngineStepConfig cfg_pass = cfg_sub;
+            const float w = (float)C * (float)Kc / (float)K;
+            if (C > 1) {
+                for (float& x : cfg_pass.loss.weights) x *= w;
+                cfg_pass.loss.w_ssim *= w;
+            }
 
-        set_camera_params(out_W, out_H, post_model, post_dist,
-                          p_vmt_k, p_itr_k, p_dst_k);
-        set_training_data_warped(input_camera_model, input_distortion,
-                                 /*B_in=*/1, in_H, in_W, K, out_H, out_W,
-                                 rgb_k, mask_k,
-                                 mask_in_H, mask_in_W,
-                                 dep_k, depth_in_H, depth_in_W,
-                                 nrm_k, normal_in_H, normal_in_W,
-                                 cfg.loss.input_depth_is_ray_depth,
-                                 i_itr_k, i_dst_k, i_src_m_k, i_src_p_k,
-                                 axes_k);
+            TorchTensorView p_vmt_k = _slice_tv_range_first_dim(post_viewmats,    row, Kc);
+            TorchTensorView p_itr_k = _slice_tv_range_first_dim(post_intrins,     row, Kc);
+            TorchTensorView p_dst_k = _slice_tv_range_first_dim(post_dist_coeffs, row, Kc);
+            TorchTensorView bgi_k   = _slice_tv_range_first_dim(bilagrid_cam_indices, row, Kc);
+            TorchTensorView axes_k  = std::get<0>(face_axes) == 0
+                ? face_axes : _slice_tv_range_first_dim(face_axes, row, Kc);
 
-        _set_cur_cam_indices(bgi_k);
-        engine_viewer_capture_thumbnails(bgi_k);
+            set_camera_params(Wc, Hc, post_model, post_dist,
+                              p_vmt_k, p_itr_k, p_dst_k);
+            set_training_data_warped(input_camera_model, input_distortion,
+                                     /*B_in=*/1, in_H, in_W, Kc, Hc, Wc,
+                                     rgb_k, mask_k,
+                                     mask_in_H, mask_in_W,
+                                     dep_k, depth_in_H, depth_in_W,
+                                     nrm_k, normal_in_H, normal_in_W,
+                                     cfg.loss.input_depth_is_ray_depth,
+                                     i_itr_k, i_dst_k, i_src_m_k, i_src_p_k,
+                                     axes_k);
 
-        auto ld = _engine_step_fwd_bwd_only(
-            step, primitive, sh_degree, packed, bgi_k, cfg_sub);
+            _set_cur_cam_indices(bgi_k);
+            engine_viewer_capture_thumbnails(bgi_k);
 
-        if (engine().fwd.accum_weight.data_ptr() != nullptr) {
-            _fold_accum_weight(accum_weight_sum, N_splats);
-        }
+            // Reported as they come: the pass weights average to 1, so the
+            // mean below is the weighted total the loss actually is.
+            auto ld = _engine_step_fwd_bwd_only(
+                step, primitive, sh_degree, packed, bgi_k, cfg_pass);
 
-        if (k == 0) {
-            agg = std::move(ld);
-        } else {
-            for (auto& [key, val] : ld) {
-                auto it = agg.find(key);
-                if (it == agg.end()) agg.emplace(key, val);
-                else                 it->second += val;
+            if (engine().fwd.accum_weight.data_ptr() != nullptr) {
+                _fold_accum_weight(accum_weight_sum, N_splats);
+            }
+
+            if (j == 0 && c == 0) {
+                agg = std::move(ld);
+            } else {
+                for (auto& [key, val] : ld) {
+                    auto it = agg.find(key);
+                    if (it == agg.end()) agg.emplace(key, val);
+                    else                 it->second += val;
+                }
             }
         }
     }
-    for (auto& [key, val] : agg) val /= (float)B_in;
+    for (auto& [key, val] : agg) val /= (float)P;
 
     engine().fwd.accum_weight = accum_weight_sum;
 
-    // grad_scale = 1/B_in (number of sub-batches), NOT 1/B_post: each
-    // sub-batch's loss kernel already normalizes by 1/(K*H*W), so summing
-    // B_in sub-batches over-counts by exactly B_in relative to the unsplit
-    // B_post-camera batch (whose per-pixel grad is 1/(B_post*H*W)).
+    // grad_scale = 1/passes, NOT 1/B_post: each pass's loss kernel already
+    // normalizes by 1/(cameras*H*W), so summing them over-counts by exactly
+    // the pass count relative to the unsplit batch.
     engine().optim.skip_grad_zero      = false;
-    engine().optim.grad_scale          = 1.0f / (float)B_in;
+    engine().optim.grad_scale          = 1.0f / (float)P;
     engine().optim.zero_grad_in_optim  = true;
 
     _engine_step_optim_and_densify(step, max_steps, cfg, agg);
@@ -745,11 +761,13 @@ std::map<std::string, float> engine_train_step_warped(
     TorchTensorView gt_normal_byte,       // [B_in, normal_in_H, normal_in_W, 3] u8/f32 (nullable)
     int normal_in_H, int normal_in_W,
     TorchTensorView face_axes,            // [B_in*K, 3, 3]
+    // Runs of equal-size faces; empty or one entry = one pass at out_W x out_H.
+    const std::vector<WarpFacePass>& face_passes,
     // Bilagrid cam indices in the POST-split index space.
     TorchTensorView bilagrid_cam_indices,
     const EngineStepConfig& cfg
 ) {
-    if (cfg.optim.split_batch) {
+    if (cfg.optim.split_batch || face_passes.size() > 1) {
         return _engine_train_step_split_warped(
             step, max_steps, std::move(primitive), sh_degree, packed,
             out_W, out_H, post_viewmats, post_intrins, post_dist_coeffs,
@@ -759,7 +777,7 @@ std::map<std::string, float> engine_train_step_warped(
             gt_rgb_byte, gt_alpha_byte, mask_in_H, mask_in_W,
             gt_depth_byte, depth_in_H, depth_in_W,
             gt_normal_byte, normal_in_H, normal_in_W,
-            face_axes, bilagrid_cam_indices, cfg);
+            face_axes, face_passes, bilagrid_cam_indices, cfg);
     }
     // Faces are canonical pinhole; K == 1 (re-distort) keeps the camera the
     // parser fitted, which is the input one.

@@ -360,6 +360,9 @@ const double kEquirectAxes[6][3][3] = {
 
 constexpr int kMaxSplitFaces = 12;
 
+// PerFace rounds a face's sides up to this, so near-equal faces share a size.
+constexpr int kSizeStep = 32;
+
 // A frame holding less than this of its 90 degrees is a sliver not worth a
 // face. A fisheye's back frame needs far more: past 135 degrees the image's
 // corners are usually outside the image circle, which the model cannot know.
@@ -393,7 +396,7 @@ int tile_origin(const Crop& c, int axis, int i, int n, int t, int half_side) {
 const double* fisheye_face_axes()  { return &kFisheyeAxes[0][0][0]; }
 const double* equirect_face_axes() { return &kEquirectAxes[0][0][0]; }
 
-std::vector<SplitFace> plan_split_faces(const Camera& cam_in) {
+std::vector<SplitFace> plan_split_faces(const Camera& cam_in, FaceFit fit) {
     Camera cam = cam_in;
     const bool equi = cam.model == M_EQUIRECT;
     if (equi) {
@@ -429,6 +432,41 @@ std::vector<SplitFace> plan_split_faces(const Camera& cam_in) {
     if (crops.empty())
         for (int k = 0; k < K; ++k)
             crops.push_back(Crop{k, {-half, -half}, {half, half}});
+
+    if (fit == FaceFit::PerFace) {
+        // One face per crop, at its own size rounded out to kSizeStep -- a
+        // coarse step so faces that differ by a few pixels land on one size
+        // and share a render pass, which is what a pass costs.
+        std::vector<SplitFace> out;
+        for (const Crop& cr : crops) {
+            SplitFace sf;
+            sf.face = cr.face;
+            sf.fx = sf.fy = f;
+            sf.crop_w = cr.px1[0] - cr.px0[0];
+            sf.crop_h = cr.px1[1] - cr.px0[1];
+            int px[2] = {cr.px0[0], cr.px0[1]};
+            int side[2] = {sf.crop_w, sf.crop_h};
+            for (int a = 0; a < 2; ++a) {
+                const int want = std::min(2 * half,
+                                          (side[a] + kSizeStep - 1) / kSizeStep * kSizeStep);
+                px[a] = std::clamp(px[a] - (want - side[a]) / 2, -half, half - want);
+                side[a] = want;
+            }
+            sf.width = side[0];
+            sf.height = side[1];
+            sf.cx = -px[0];
+            sf.cy = -px[1];
+            out.push_back(sf);
+        }
+        // Equal sizes adjacent: a pass covers one run of the face axis, so the
+        // order is what decides how many passes a camera costs.
+        std::stable_sort(out.begin(), out.end(),
+                         [](const SplitFace& a, const SplitFace& b) {
+                             if (a.height != b.height) return a.height > b.height;
+                             return a.width > b.width;
+                         });
+        return out;
+    }
 
     // Candidate tile sides: every crop's extent and its halves and thirds.
     auto candidates = [&](int axis) {
@@ -468,6 +506,8 @@ std::vector<SplitFace> plan_split_faces(const Camera& cam_in) {
                 sf.face = cr.face;
                 sf.width = best_w;
                 sf.height = best_h;
+                sf.crop_w = cr.px1[0] - cr.px0[0];
+                sf.crop_h = cr.px1[1] - cr.px0[1];
                 sf.fx = sf.fy = f;
                 sf.cx = -tile_origin(cr, 0, ix, nx, best_w, half);
                 sf.cy = -tile_origin(cr, 1, iy, ny, best_h, half);

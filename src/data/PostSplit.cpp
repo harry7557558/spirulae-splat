@@ -55,9 +55,16 @@ std::string camera_key(const camhost::Camera& c) {
 
 }  // namespace
 
+// Auto turns per-face sizing on when a run already pays for several passes
+// and the crops save at least this much, or when they save so much that the
+// passes pay for themselves (measured: the fused optimizer is worth ~10%).
+constexpr double kSavingFree = 0.10;
+constexpr double kSavingPaid = 0.35;
+
 PostSplitCameras bake_post_split(const ParsedDataset& ds,
                                  bool warp_to_pinhole,
-                                 bool warp_spherical_to_pinhole) {
+                                 bool warp_spherical_to_pinhole,
+                                 WarpFaceFit fit, bool multi_pass_free) {
     const int64_t N = ds.num_cameras;
     const int PINHOLE_V   = (int)camera_model_from_name("PINHOLE");
     const int FISHEYE_V   = (int)camera_model_from_name("FISHEYE");
@@ -65,6 +72,7 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
     const int EQUIRECT_V  = (int)camera_model_from_name("EQUIRECTANGULAR");
 
     // Which cameras split, and one plan per distinct camera among them.
+    double out_saving = 0.0;
     std::vector<int32_t> plan_of((size_t)N, -1);
     std::vector<camhost::Camera> plan_cams;
     std::map<std::string, int32_t> plan_index;
@@ -82,10 +90,38 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
         }
         plan_of[(size_t)i] = it->second;
     }
-    std::vector<std::vector<camhost::SplitFace>> plans(plan_cams.size());
+    // Auto needs both plans to compare; a named mode needs only its own.
+    const bool want_uniform = fit != WarpFaceFit::PerFace;
+    const bool want_per_face = fit != WarpFaceFit::Uniform;
+    std::vector<std::vector<camhost::SplitFace>> uni(plan_cams.size());
+    std::vector<std::vector<camhost::SplitFace>> per(plan_cams.size());
     #pragma omp parallel for schedule(dynamic)
-    for (int p = 0; p < (int)plan_cams.size(); p++)
-        plans[(size_t)p] = camhost::plan_split_faces(plan_cams[(size_t)p]);
+    for (int p = 0; p < (int)plan_cams.size(); p++) {
+        if (want_uniform)
+            uni[(size_t)p] = camhost::plan_split_faces(plan_cams[(size_t)p],
+                                                       camhost::FaceFit::Uniform);
+        if (want_per_face)
+            per[(size_t)p] = camhost::plan_split_faces(plan_cams[(size_t)p],
+                                                       camhost::FaceFit::PerFace);
+    }
+
+    // The saving over the whole dataset, weighting each camera by its images.
+    if (want_uniform && want_per_face) {
+        double px_uni = 0.0, px_per = 0.0;
+        for (int64_t i = 0; i < N; i++) {
+            const int32_t p = plan_of[(size_t)i];
+            if (p < 0) continue;
+            for (const camhost::SplitFace& f : uni[(size_t)p])
+                px_uni += (double)f.width * f.height;
+            for (const camhost::SplitFace& f : per[(size_t)p])
+                px_per += (double)f.width * f.height;
+        }
+        if (px_uni > 0.0) out_saving = 1.0 - px_per / px_uni;
+    }
+    const bool per_face = fit == WarpFaceFit::PerFace ||
+        (fit == WarpFaceFit::Auto &&
+         out_saving >= (multi_pass_free ? kSavingFree : kSavingPaid));
+    std::vector<std::vector<camhost::SplitFace>>& plans = per_face ? per : uni;
     // A lens that fits one face is not wide: the engine renders it as itself,
     // since K == 1 is what tells the DataManager a camera is not warped.
     for (int64_t i = 0; i < N; i++)
@@ -99,12 +135,15 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
             std::fprintf(stderr, "[split] camera %zu: %dx%d f=%.1f ->", p, c.width,
                          c.height, c.fx);
             for (const camhost::SplitFace& f : plans[p])
-                std::fprintf(stderr, " [frame %d %dx%d c=(%.0f,%.0f)]", f.face,
-                             f.width, f.height, f.cx, f.cy);
+                std::fprintf(stderr, " [frame %d %dx%d c=(%.0f,%.0f) crop %dx%d]",
+                             f.face, f.width, f.height, f.cx, f.cy, f.crop_w,
+                             f.crop_h);
             std::fprintf(stderr, "\n");
         }
 
     PostSplitCameras out;
+    out.per_face = per_face;
+    out.per_face_saving = out_saving;
     out.K_per_camera.resize((size_t)N);
     out.post_offsets.resize((size_t)N);
     int64_t n_post = 0;
@@ -211,6 +250,13 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
             out.post_faces[j]   = sf.face;
             for (int m = 0; m < 9; m++) out.face_axes[j*9 + m] = (float)ax[m];
         }
+        // Faces come out grouped by size, so a pass is one run of them.
+        int passes = K > 0 ? 1 : 0;
+        for (int k = 1; k < K; k++)
+            if (faces[(size_t)k].width != faces[(size_t)k - 1].width ||
+                faces[(size_t)k].height != faces[(size_t)k - 1].height)
+                passes++;
+        out.face_passes = std::max(out.face_passes, passes);
     }
 
     // c2w -> engine viewmat over the POST arrays:

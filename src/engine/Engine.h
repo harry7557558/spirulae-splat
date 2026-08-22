@@ -330,6 +330,10 @@ std::map<std::string, float> engine_train_step_warped(
     TorchTensorView gt_normal_byte,
     int normal_in_H, int normal_in_W,
     TorchTensorView face_axes,
+    // Runs of equal-size faces (DecodedBatch::face_passes). Empty or a single
+    // entry renders every face in one pass at out_W x out_H; more than one
+    // needs the accumulating path, so the fused optimizer must be off.
+    const std::vector<WarpFacePass>& face_passes,
     TorchTensorView bilagrid_cam_indices,
     const EngineStepConfig& cfg
 );
@@ -445,19 +449,13 @@ void engine_resolve_data_error(bool retry);
 // the training DataManager, so this belongs after the training loop.
 int engine_eval_forward(std::string primitive, int sh_degree, bool packed);
 
-// Same, for ONE image chosen by dataset index instead of the next one in the
-// stream: the GUI's ground-truth-vs-render view. `apply_color_correction`
-// additionally runs the per-image bilagrid / PPISP forward the training step
-// runs, so the pair read back is the pair the loss is computed on rather than
-// the raw render.
-//
-// This overwrites the GT and camera-parameter state a training step owns. The
-// next engine_train_step_managed sets both again, so it is safe BETWEEN steps
-// -- take the same mutex the trainer does. Returns the POST-split view count
-// (K) for that image.
+// Same, for ONE image by dataset index (the GUI's compare view), rendering one
+// pass of its faces: returns that pass's views, `out_passes` the image's count.
+// Overwrites the GT and camera state a step owns -- BETWEEN steps, under its mutex.
 int engine_preview_forward(int index, std::string primitive, int sh_degree,
                            bool packed, bool apply_color_correction,
-                           const LossConfig& loss);
+                           const LossConfig& loss, int pass = 0,
+                           int* out_passes = nullptr);
 
 // --- Debug rendering ---
 

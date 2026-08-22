@@ -243,9 +243,20 @@ ParsedDataset parse_dataset(const std::string& dataset_dir,
 // Per-input split factor K: the faces camhost::plan_split_faces returns for a
 // FISHEYE / EQUISOLID camera when warp_to_pinhole, and for an EQUIRECTANGULAR
 // one when warp_spherical_to_pinhole (else K=1 direct-equirect); 1 otherwise.
+
+// One size for every face (one render pass), or each face cropped to its own
+// lens (one pass per size). Auto picks per-face where it pays; bake_post_split.
+enum class WarpFaceFit { Auto = 0, Uniform, PerFace };
+
 struct PostSplitCameras {
     int64_t n_post = 0;
     bool any_warp        = false;   // any K > 1
+    bool per_face        = false;   // what Auto resolved to
+    // Distinct face sizes on one camera, i.e. render passes per input image.
+    int  face_passes     = 1;
+    // What per-face sizing would save, as a fraction of the uniform plan's
+    // pixels; 0 when nothing splits. What Auto reads.
+    double per_face_saving = 0.0;
     bool any_fov_mask    = false;   // a split face reaches past what its lens
                                     // holds (DataManager synthesizes FOV masks)
     bool direct_equirect = false;   // un-split equirect present
@@ -286,9 +297,13 @@ struct PostSplitCameras {
     std::vector<float>   redistort_params;   // [N, 16]
 };
 
+// `multi_pass_free` says the run already renders in several passes (the fused
+// optimizer is off anyway), which is what makes per-face sizing nearly free.
 PostSplitCameras bake_post_split(const ParsedDataset& ds,
                                  bool warp_to_pinhole,
-                                 bool warp_spherical_to_pinhole);
+                                 bool warp_spherical_to_pinhole,
+                                 WarpFaceFit fit = WarpFaceFit::Uniform,
+                                 bool multi_pass_free = false);
 
 
 // ===========================================================================
