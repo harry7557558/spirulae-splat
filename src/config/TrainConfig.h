@@ -243,6 +243,7 @@ inline int train_tier_rank(const char* tier) {
     X(bool, use_adagrad_bilagrid_optim, true, "correction", "advanced", "")  \
     X(bool, use_ppisp, true, "correction", "basic", "")                      \
     X(std::string, ppisp_param_type, "no_crf", "correction", "basic", "original|rqs|no_crf") \
+    X(bool, ppisp_exposure_from_exif, false, "correction", "basic", "")      \
     X(bool, apply_ppisp_before_bilagrid, true, "correction", "advanced", "") \
     X(bool, use_adagrad_ppisp_optim, true, "correction", "advanced", "")     \
     X(float, ppisp_reg_exposure_mean, 1.0f, "correction", "advanced", "")    \

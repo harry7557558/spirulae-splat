@@ -6513,6 +6513,65 @@ SS_MSG(ppisp_param_type_help,
        "bir ton eğrisi ekler. `rqs` ise karanlık bölgelerde daha iyi davranan "
        "bir ton eğrisi kullanır."));
 
+SS_MSG(ppisp_exposure_from_exif,
+    EN("Exposure init from EXIF"), JA("EXIF による露出の初期化"),
+    ZH_HANS("用 EXIF 初始化曝光"), ZH_HANT("用 EXIF 初始化曝光"),
+    KO("EXIF로 노출 초기화"), DE("Belichtungsstart aus EXIF"),
+    FR("Exposition initiale depuis l'EXIF"), ES("Exposición inicial desde EXIF"),
+    PT("Exposição inicial do EXIF"), IT("Esposizione iniziale da EXIF"),
+    NL("Belichting starten vanuit EXIF"), RU("Начальная экспозиция из EXIF"),
+    TR("EXIF'ten pozlama başlangıcı"));
+SS_MSG(ppisp_exposure_from_exif_help,
+    EN("Seed each photo's exposure correction from the shutter, aperture and "
+       "ISO its EXIF records, relative to the set's average, instead of from "
+       "zero. Photos without those tags start at the average. Helps when "
+       "exposure varies across the capture."),
+    JA("各写真の露出補正を、ゼロからではなく EXIF に記録されたシャッター速度・"
+       "絞り・ISO から、セットの平均を基準に初期化します。タグのない写真は平均"
+       "から始まります。撮影中に露出が変わる場合に有効です。"),
+    ZH_HANS("用 EXIF 记录的快门、光圈和 ISO（相对于整组的平均值）来初始化每张"
+            "照片的曝光校正，而不是从零开始。没有这些标签的照片从平均值开始。"
+            "在拍摄过程中曝光有变化时有帮助。"),
+    ZH_HANT("用 EXIF 記錄的快門、光圈和 ISO（相對於整組的平均值）來初始化每張"
+            "照片的曝光校正，而不是從零開始。沒有這些標籤的照片從平均值開始。"
+            "在拍攝過程中曝光有變化時有幫助。"),
+    KO("각 사진의 노출 보정을 0이 아니라 EXIF에 기록된 셔터·조리개·ISO에서, 전"
+       "체 평균을 기준으로 초기화합니다. 태그가 없는 사진은 평균에서 시작합니"
+       "다. 촬영 중 노출이 달라질 때 도움이 됩니다."),
+    DE("Die Belichtungskorrektur jedes Fotos aus Verschlusszeit, Blende und ISO "
+       "seiner EXIF-Daten starten, relativ zum Durchschnitt des Satzes, statt "
+       "bei null. Fotos ohne diese Tags starten beim Durchschnitt. Hilft, wenn "
+       "die Belichtung über die Aufnahme variiert."),
+    FR("Amorcer la correction d'exposition de chaque photo à partir de la vitesse, "
+       "de l'ouverture et de l'ISO enregistrés dans son EXIF, par rapport à la "
+       "moyenne de l'ensemble, plutôt qu'à zéro. Les photos sans ces balises "
+       "partent de la moyenne. Utile quand l'exposition varie au fil de la prise "
+       "de vue."),
+    ES("Inicializar la corrección de exposición de cada foto a partir del obturador, "
+       "la apertura y el ISO que registra su EXIF, relativos a la media del conjunto, "
+       "en lugar de desde cero. Las fotos sin esas etiquetas parten de la media. "
+       "Ayuda cuando la exposición varía a lo largo de la captura."),
+    PT("Inicializar a correção de exposição de cada foto a partir do obturador, "
+       "da abertura e do ISO registrados no EXIF, relativos à média do conjunto, "
+       "em vez de partir do zero. Fotos sem essas tags partem da média. Ajuda "
+       "quando a exposição varia ao longo da captura."),
+    IT("Inizializzare la correzione di esposizione di ogni foto da otturatore, "
+       "apertura e ISO registrati nel suo EXIF, relativi alla media del set, invece "
+       "che da zero. Le foto senza quei tag partono dalla media. Aiuta quando "
+       "l'esposizione varia durante la ripresa."),
+    NL("De belichtingscorrectie van elke foto starten vanuit de sluitertijd, het "
+       "diafragma en de ISO uit de EXIF, relatief aan het gemiddelde van de set, "
+       "in plaats van vanaf nul. Foto's zonder die tags starten op het gemiddelde. "
+       "Helpt wanneer de belichting tijdens de opname varieert."),
+    RU("Инициализировать коррекцию экспозиции каждого фото по выдержке, диафрагме "
+       "и ISO из его EXIF относительно среднего по набору, а не с нуля. Фото без "
+       "этих тегов начинают со среднего. Помогает, когда экспозиция меняется по "
+       "ходу съёмки."),
+    TR("Her fotoğrafın pozlama düzeltmesini sıfırdan değil, EXIF'inde kayıtlı "
+       "enstantane, diyafram ve ISO'dan, kümenin ortalamasına göre başlatır. Bu "
+       "etiketleri olmayan fotoğraflar ortalamadan başlar. Pozlama çekim boyunca "
+       "değişiyorsa yardımcı olur."));
+
 SS_MSG(apply_ppisp_before_bilagrid,
     EN("Camera correction first"), JA("カメラ補正を先に適用"),
     ZH_HANS("先做相机校正"), ZH_HANT("先做相機校正"),

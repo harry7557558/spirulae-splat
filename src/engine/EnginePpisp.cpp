@@ -38,9 +38,13 @@ static TorchTensorView _ppisp_cam_indices_tv() {
     return TorchTensorView((uint64_t)ptr, 4, {n});
 }
 
-void engine_init_ppisp(int n_grids, std::string param_type, bool use_adagrad) {
+void engine_init_ppisp(int n_grids, std::string param_type, bool use_adagrad,
+                       const std::vector<float>& exposure_init) {
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_ppisp: n_grids must be > 0");
+    if (!exposure_init.empty() && (int)exposure_init.size() != n_grids)
+        throw std::runtime_error(
+            "engine_init_ppisp: exposure_init size must be n_grids");
     int P;
     if (param_type == "original" || param_type == "") P = 36;
     else if (param_type == "rqs") P = 39;
@@ -59,6 +63,12 @@ void engine_init_ppisp(int n_grids, std::string param_type, bool use_adagrad) {
     } else {
         engine().ppisp.params.zero();
     }
+    // Exposure is params[:, 0] in every layout (shaders/ppisp.slang). Same
+    // stream as the default init, so the seeds land after it.
+    float* params = engine().ppisp.params.data_ptr();
+    for (size_t i = 0; i < exposure_init.size(); i++)
+        backend::memcpy_async(params + i * P, &exposure_init[i], sizeof(float),
+                              backend::MemcpyKind::HostToDevice, kPpispStream);
     engine().ppisp.enabled = true;
     engine().ppisp.optim_initialized = false;
 }

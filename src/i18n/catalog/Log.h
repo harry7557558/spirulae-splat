@@ -918,6 +918,21 @@ SS_MSG(ray_depth_straight_ahead,
     RU("расстояние прямо вперёд"),
     TR("ileri doğru mesafe"));
 
+SS_MSG(ppisp_exif_exposure,
+    EN("PPISP exposure initialized from EXIF ({0} of {1} photos)"),
+    JA("PPISP の露出を EXIF から初期化しました（{1} 枚中 {0} 枚）"),
+    ZH_HANS("已从 EXIF 初始化 PPISP 曝光（{1} 张照片中的 {0} 张）"),
+    ZH_HANT("已從 EXIF 初始化 PPISP 曝光（{1} 張照片中的 {0} 張）"),
+    KO("EXIF에서 PPISP 노출을 초기화했습니다({1}장 중 {0}장)"),
+    DE("PPISP-Belichtung aus EXIF initialisiert ({0} von {1} Fotos)"),
+    FR("Exposition PPISP initialisée depuis l'EXIF ({0} photos sur {1})"),
+    ES("Exposición PPISP inicializada desde EXIF ({0} de {1} fotos)"),
+    PT("Exposição PPISP inicializada a partir do EXIF ({0} de {1} fotos)"),
+    IT("Esposizione PPISP inizializzata dall'EXIF ({0} foto su {1})"),
+    NL("PPISP-belichting geïnitialiseerd uit EXIF ({0} van {1} foto's)"),
+    RU("Экспозиция PPISP инициализирована из EXIF ({0} из {1} фото)"),
+    TR("PPISP pozlaması EXIF'ten başlatıldı ({1} fotoğraftan {0})"));
+
 // Printed when the input images are EXRs and no colour space was given on the
 // command line; {0} is the gamut read out of the file.
 SS_MSG(exr_color_space,
